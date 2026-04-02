@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="mod/msteamsecp/db" VERSION="20240320" COMMENT="XMLDB file for mod_msteamsecp"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd">
+  <TABLES>
+
+    <TABLE NAME="msteamsecp" COMMENT="Teams ECP meeting activity instances">
+      <FIELDS>
+        <FIELD NAME="id"                        TYPE="int"    LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="course"                    TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="name"                      TYPE="char"   LENGTH="255" NOTNULL="true"/>
+        <FIELD NAME="intro"                     TYPE="text"   NOTNULL="false"/>
+        <FIELD NAME="introformat"               TYPE="int"    LENGTH="4"  NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="graph_meeting_id"          TYPE="char"   LENGTH="500" NOTNULL="false"/>
+        <FIELD NAME="graph_event_id"            TYPE="char"   LENGTH="500" NOTNULL="false"/>
+        <FIELD NAME="join_url"                  TYPE="char"   LENGTH="1000" NOTNULL="false"/>
+        <FIELD NAME="lobby_bypass"              TYPE="char"   LENGTH="40" NOTNULL="true" DEFAULT="organizer"/>
+        <FIELD NAME="auto_record"               TYPE="int"    LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="recording_mode"            TYPE="char"   LENGTH="10" NOTNULL="true" DEFAULT="manual"/>
+        <FIELD NAME="completion_attendance"     TYPE="int"    LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="completion_attendance_pct" TYPE="int"    LENGTH="3"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="completion_recording"      TYPE="int"    LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="is_recurring"              TYPE="int"    LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="recurrence_type"           TYPE="char"   LENGTH="10" NOTNULL="false"/>
+        <FIELD NAME="recurrence_interval"       TYPE="int"    LENGTH="3"  NOTNULL="false" DEFAULT="1"/>
+        <FIELD NAME="recurrence_end_date"       TYPE="int"    LENGTH="10" NOTNULL="false"/>
+        <FIELD NAME="recurrence_count"          TYPE="int"    LENGTH="5"  NOTNULL="false"/>
+        <FIELD NAME="recurrence_days_of_week"   TYPE="char"   LENGTH="20" NOTNULL="false"/>
+        <FIELD NAME="recording_behavior"        TYPE="char"   LENGTH="10" NOTNULL="true" DEFAULT="append"/>
+        <FIELD NAME="recording_section_id"      TYPE="int"    LENGTH="10" NOTNULL="false"/>
+        <FIELD NAME="starttime"                 TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="endtime"                   TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timecreated"               TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified"              TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary"   TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_course" TYPE="foreign" FIELDS="course" REFTABLE="course" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="idx_course" UNIQUE="false" FIELDS="course"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="msteamsecp_occurrences" COMMENT="One row per occurrence including single meetings">
+      <FIELDS>
+        <FIELD NAME="id"                   TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="instanceid"           TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="occurrence_index"     TYPE="int"  LENGTH="5"  NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="graph_occurrence_id"  TYPE="char" LENGTH="500" NOTNULL="false"/>
+        <FIELD NAME="graph_event_id"       TYPE="char" LENGTH="500" NOTNULL="false"/>
+        <FIELD NAME="starttime"            TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="endtime"              TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="status"               TYPE="char" LENGTH="10" NOTNULL="true" DEFAULT="upcoming"/>
+        <FIELD NAME="recording_cmid"       TYPE="int"  LENGTH="10" NOTNULL="false"/>
+        <FIELD NAME="recording_ready"      TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="attendance_fetched"   TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="attendance_report_id" TYPE="char" LENGTH="500" NOTNULL="false"/>
+        <FIELD NAME="timecreated"          TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary"     TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_instance" TYPE="foreign" FIELDS="instanceid" REFTABLE="msteamsecp" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="idx_instance_status" UNIQUE="false" FIELDS="instanceid, status"/>
+        <INDEX NAME="idx_starttime"       UNIQUE="false" FIELDS="starttime"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="msteamsecp_attendance" COMMENT="Per-user attendance per occurrence">
+      <FIELDS>
+        <FIELD NAME="id"               TYPE="int"    LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="instanceid"       TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="occurrenceid"     TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid"           TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="join_time"        TYPE="int"    LENGTH="10" NOTNULL="false"/>
+        <FIELD NAME="leave_time"       TYPE="int"    LENGTH="10" NOTNULL="false"/>
+        <FIELD NAME="duration_seconds" TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="attendance_pct"   TYPE="number" LENGTH="5"  DECIMALS="2" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="credit_granted"   TYPE="int"    LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="credit_method"    TYPE="char"   LENGTH="10" NOTNULL="false"/>
+        <FIELD NAME="timecreated"      TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified"     TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary"       TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_occurrence" TYPE="foreign" FIELDS="occurrenceid" REFTABLE="msteamsecp_occurrences" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="idx_occurrence_user" UNIQUE="true"  FIELDS="occurrenceid, userid"/>
+        <INDEX NAME="idx_instance_user"   UNIQUE="false" FIELDS="instanceid, userid"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="msteamsecp_enrollee_events" COMMENT="Graph calendar events pushed to enrollee calendars">
+      <FIELDS>
+        <FIELD NAME="id"             TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="instanceid"     TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="occurrenceid"   TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid"         TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="graph_event_id" TYPE="char" LENGTH="500" NOTNULL="false"/>
+        <FIELD NAME="timepushed"     TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="removed"        TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timeremoved"    TYPE="int"  LENGTH="10" NOTNULL="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary"       TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_occurrence" TYPE="foreign" FIELDS="occurrenceid" REFTABLE="msteamsecp_occurrences" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="idx_occurrence_user" UNIQUE="true"  FIELDS="occurrenceid, userid"/>
+        <INDEX NAME="idx_instance_user"   UNIQUE="false" FIELDS="instanceid, userid"/>
+        <INDEX NAME="idx_pending_removal" UNIQUE="false" FIELDS="removed, timepushed"/>
+      </INDEXES>
+    </TABLE>
+
+
+    <!-- Co-organisers manually selected per meeting instance -->
+    <TABLE NAME="msteamsecp_coorganisers" COMMENT="Manually selected co-organisers per meeting">
+      <FIELDS>
+        <FIELD NAME="id"         TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="instanceid" TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid"     TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary"     TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_instance" TYPE="foreign" FIELDS="instanceid" REFTABLE="msteamsecp" REFFIELDS="id"/>
+        <KEY NAME="fk_user"     TYPE="foreign" FIELDS="userid"     REFTABLE="user"        REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="idx_instance_user" UNIQUE="true" FIELDS="instanceid, userid"/>
+      </INDEXES>
+    </TABLE>
+
+  </TABLES>
+</XMLDB>
