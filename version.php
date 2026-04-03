@@ -9,7 +9,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'mod_msteamsecp';
-$plugin->version   = 2026032402;
+$plugin->version   = 2026040100;
 $plugin->requires  = 2022041900; // Moodle 4.0+
 $plugin->maturity  = MATURITY_STABLE;
-$plugin->release   = '1.3.0';
+$plugin->release   = '1.4.0';

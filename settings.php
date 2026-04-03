@@ -41,6 +41,65 @@ if ($hassiteconfig) {
         get_string('settings_service_account_upn_desc', 'mod_msteamsecp'), ''
     ));
 
+    // ── Delegated auth (service account OAuth) ────────────────────────────
+    $settings->add(new admin_setting_heading(
+        'mod_msteamsecp/oauth_heading',
+        get_string('settings_oauth_heading', 'mod_msteamsecp'), ''
+    ));
+
+    // Show connection status and authorize button as a static HTML element.
+    $token_status  = \mod_msteamsecp\api\graph::delegated_token_status();
+    $authorize_url = new moodle_url('/mod/msteamsecp/oauth_authorize.php');
+
+    if ($token_status['state'] === 'ok') {
+        $age_str = $token_status['age_days'] !== null
+            ? ' (' . $token_status['age_days'] . ' days old)'
+            : '';
+        $status_html = html_writer::tag('span',
+            '✅ ' . get_string('oauth_status_connected', 'mod_msteamsecp') . $age_str,
+            ['style' => 'color:#1a6b1a; font-weight:bold;']
+        );
+        $status_html .= html_writer::empty_tag('br') . html_writer::empty_tag('br');
+        $status_html .= html_writer::link(
+            $authorize_url,
+            get_string('oauth_reauthorize', 'mod_msteamsecp'),
+            ['class' => 'btn btn-secondary btn-sm']
+        );
+    } elseif ($token_status['state'] === 'warning') {
+        $status_html = html_writer::tag('span',
+            '⚠️ ' . $token_status['message'],
+            ['style' => 'color:#8a6d00; font-weight:bold;']
+        );
+        $status_html .= html_writer::empty_tag('br') . html_writer::empty_tag('br');
+        $status_html .= html_writer::link(
+            $authorize_url,
+            get_string('oauth_reauthorize', 'mod_msteamsecp'),
+            ['class' => 'btn btn-warning btn-sm']
+        );
+    } else {
+        $status_html = html_writer::tag('span',
+            '⚠️ ' . get_string('oauth_status_not_connected', 'mod_msteamsecp'),
+            ['style' => 'color:#8a6d00; font-weight:bold;']
+        );
+        $status_html .= html_writer::empty_tag('br');
+        $status_html .= html_writer::tag('small',
+            get_string('oauth_status_not_connected_desc', 'mod_msteamsecp'),
+            ['style' => 'color:#666;']
+        );
+        $status_html .= html_writer::empty_tag('br') . html_writer::empty_tag('br');
+        $status_html .= html_writer::link(
+            $authorize_url,
+            get_string('oauth_authorize_btn', 'mod_msteamsecp'),
+            ['class' => 'btn btn-primary btn-sm']
+        );
+    }
+
+    $settings->add(new admin_setting_heading(
+        'mod_msteamsecp/oauth_status_display',
+        get_string('settings_oauth_status', 'mod_msteamsecp'),
+        $status_html
+    ));
+
     // ── Role mapping ──────────────────────────────────────────────────────
     $settings->add(new admin_setting_heading(
         'mod_msteamsecp/roles_heading',

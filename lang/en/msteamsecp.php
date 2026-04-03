@@ -153,3 +153,23 @@ $string['coorganisers_help'] = 'Select at least one facilitator for this meeting
 $string['coorganisers_none'] = 'No facilitators selected';
 
 $string['add_to_calendar'] = 'Add to calendar (.ics)';
+
+// OAuth / delegated auth.
+$string['settings_oauth_heading']            = 'Service account authorization';
+$string['settings_oauth_heading_desc']       = 'The plugin uses a delegated (user) token for meeting creation so Teams treats meetings as user-created, giving facilitators full co-organizer permissions immediately. Authorize once — the plugin refreshes the token automatically.';
+$string['settings_oauth_status']             = 'Connection status';
+$string['oauth_status_connected']            = 'Service account connected';
+$string['oauth_status_active']               = 'Active';
+$string['oauth_status_not_connected']        = 'Not connected';
+$string['oauth_status_not_connected_desc']   = 'Meeting creation will fall back to app-only token until the service account is authorized. Facilitators may not have full co-organizer permissions.';
+$string['oauth_access_expires']              = 'Access token expires: {$a}';
+$string['oauth_authorize_btn']               = 'Authorize service account';
+$string['oauth_reauthorize']                 = 'Re-authorize service account';
+$string['oauth_success']                     = 'Service account authorized successfully. Meeting creation will now use delegated permissions.';
+$string['oauth_error']                       = 'Microsoft returned an error during authorization: {$a}';
+$string['oauth_token_error']                 = 'Failed to exchange authorization code for tokens: {$a}';
+$string['oauth_state_mismatch']              = 'Authorization state mismatch — possible CSRF attempt. Please try again.';
+$string['oauth_not_configured']              = 'Please save your Tenant ID and Client ID before authorizing.';
+$string['oauth_token_expired_notice']  = 'The service account authorization has expired. The meeting was created with reduced facilitator permissions. Please re-authorize to restore full co-organiser access.';
+$string['oauth_token_missing_notice']  = 'The service account has not been authorized. The meeting was created with reduced facilitator permissions. Please authorize the service account to enable full co-organiser access.';
+$string['oauth_token_failed_notice']   = 'Service account re-authorization required. The meeting was created with reduced facilitator permissions.';

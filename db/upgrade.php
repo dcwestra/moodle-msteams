@@ -77,5 +77,11 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026032401, 'msteamsecp');
     }
 
+    if ($oldversion < 2026040100) {
+        // v1.4.0 — delegated OAuth token support.
+        // Tokens are stored in mdl_config_plugins — no schema changes needed.
+        upgrade_mod_savepoint(true, 2026040100, 'msteamsecp');
+    }
+
     return true;
 }

@@ -114,7 +114,8 @@ class meeting_creator {
             }
         }
 
-        // Remove from all enrollee calendars.
+        // Remove learner calendar invites from the service account calendar.
+        // Graph will send cancellation notifications to each attendee automatically.
         $enrollee_events = $DB->get_records('msteamsecp_enrollee_events', [
             'instanceid' => $instance->id,
             'removed'    => 0,
@@ -122,10 +123,7 @@ class meeting_creator {
         foreach ($enrollee_events as $ee) {
             if (!empty($ee->graph_event_id)) {
                 try {
-                    $user = $DB->get_record('user', ['id' => $ee->userid]);
-                    if ($user) {
-                        $this->graph->remove_event_from_user($user->email, $ee->graph_event_id);
-                    }
+                    $this->graph->delete_event($ee->graph_event_id);
                 } catch (\Throwable $e) {
                     debugging('msteamsecp: could not remove user calendar event: ' . $e->getMessage(), DEBUG_DEVELOPER);
                 }
@@ -176,12 +174,14 @@ class meeting_creator {
             $result = $this->graph->update_meeting($instance->graph_meeting_id, [
                 'participants' => ['attendees' => $attendees],
             ]);
-            debugging('msteamsecp sync_coorganisers PATCH result roles: ' . json_encode(
-                array_map(fn($a) => ['upn' => $a['upn'] ?? '?', 'role' => $a['role'] ?? '?'],
-                    $result['participants']['attendees'] ?? [])
-            ), DEBUG_NORMAL);
+            debugging('msteamsecp sync_coorganisers PATCH result — attendee roles: '
+                . json_encode(array_map(
+                    fn($a) => ['upn' => $a['upn'] ?? '?', 'role' => $a['role'] ?? '?'],
+                    $result['participants']['attendees'] ?? []
+                )) . ' | lobby: ' . json_encode($result['lobbyBypassSettings'] ?? 'missing'),
+                DEBUG_NORMAL);
         } catch (\Throwable $e) {
-            debugging('msteamsecp sync_coorganisers PATCH failed: ' . $e->getMessage(), DEBUG_NORMAL);
+            debugging('msteamsecp: co-organiser meeting sync failed: ' . $e->getMessage(), DEBUG_NORMAL);
         }
 
         // 2. Sync attendees on the service account calendar event so co-organisers
@@ -248,11 +248,6 @@ class meeting_creator {
         ];
 
         $meeting = $this->graph->create_meeting($meeting_params);
-        debugging('msteamsecp create_meeting response — recordAutomatically: '
-            . json_encode($meeting['recordAutomatically'] ?? 'missing')
-            . ' | allowRecording: ' . json_encode($meeting['allowRecording'] ?? 'missing')
-            . ' | lobby: ' . json_encode($meeting['lobbyBypassSettings'] ?? 'missing'),
-            DEBUG_NORMAL);
 
         // Create the service account calendar event.
         // Co-organisers are added as required calendar attendees so they receive

@@ -2,13 +2,15 @@
 /**
  * Microsoft Graph API client for mod_msteamsecp.
  *
- * Handles OAuth2 client_credentials token acquisition and all Graph
- * calls needed by the plugin:
- *   - Create / update / delete onlineMeetings
- *   - Create / update / delete calendar events
- *   - Push calendar events to user mailboxes
- *   - Fetch attendance reports
- *   - Fetch and download recordings from OneDrive
+ * Dual-token architecture:
+ *   - App-only token (client credentials): used for all calls except meeting creation.
+ *     Suitable for background tasks, calendar events, attendance, recordings.
+ *   - Delegated token (authorization code / refresh token): used exclusively for
+ *     POST/PATCH /me/onlineMeetings so Teams treats the meeting as user-created,
+ *     giving co-organisers full permissions without the organiser joining first.
+ *
+ * The delegated token is obtained once via an admin OAuth flow (oauth_authorize.php
+ * → oauth_callback.php) and refreshed automatically from the stored refresh token.
  *
  * @package    mod_msteamsecp
  * @copyright  2026 Eyecare Partners
@@ -23,12 +25,21 @@ class graph {
 
     const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
-    /** @var string Cached access token */
+    // ── App-only token (client credentials) ───────────────────────────────────
+    /** @var string|null Cached app-only access token */
     private $token = null;
 
-    /** @var int Token expiry unix timestamp */
+    /** @var int App-only token expiry unix timestamp */
     private $token_expires = 0;
 
+    // ── Delegated token (authorization code flow) ─────────────────────────────
+    /** @var string|null Cached delegated access token */
+    private $delegated_token = null;
+
+    /** @var int Delegated token expiry unix timestamp */
+    private $delegated_token_expires = 0;
+
+    // ── Config ────────────────────────────────────────────────────────────────
     /** @var string Azure tenant ID */
     private $tenant_id;
 
@@ -104,16 +115,28 @@ class graph {
     // -------------------------------------------------------------------------
 
     /**
-     * Create a Teams online meeting via Graph.
+     * Create a Teams online meeting via Graph using a delegated token.
      *
-     * Uses the standard POST /onlineMeetings endpoint. The Prefer header
-     * is set globally in request() so the coorganizer role value in
-     * participants.attendees is accepted and returned correctly.
+     * Uses POST /me/onlineMeetings so Teams treats the meeting as user-created
+     * by the service account. This gives co-organisers full permissions from
+     * the moment the meeting begins, without the service account needing to join.
+     * Falls back to app-only token if no delegated token is configured.
      *
-     * @param array $params  Meeting parameters including participants for co-organisers
+     * @param array $params  Meeting parameters
      * @return array         Graph onlineMeeting object
      */
     public function create_meeting(array $params): array {
+        if ($this->has_delegated_token()) {
+            debugging('msteamsecp: create_meeting using DELEGATED token via /me/onlineMeetings', DEBUG_NORMAL);
+            $result = $this->request('POST', '/me/onlineMeetings', $params, true);
+            debugging('msteamsecp: create_meeting response — meetingType: '
+                . json_encode($result['meetingType'] ?? 'missing')
+                . ' | lobby: ' . json_encode($result['lobbyBypassSettings'] ?? 'missing')
+                . ' | attendees: ' . json_encode(array_column($result['participants']['attendees'] ?? [], 'role')),
+                DEBUG_NORMAL);
+            return $result;
+        }
+        debugging('msteamsecp: create_meeting using APP-ONLY token via /users/{id}/onlineMeetings — delegated token not configured', DEBUG_NORMAL);
         return $this->request(
             'POST',
             '/users/' . urlencode($this->get_service_account_id()) . '/onlineMeetings',
@@ -124,11 +147,17 @@ class graph {
     /**
      * Update an existing online meeting.
      *
+     * Uses delegated token if available (required for /me/ path).
+     * Falls back to app-only with /users/{id}/ path.
+     *
      * @param string $meeting_id  Graph onlineMeeting ID
      * @param array  $params      Fields to update
      * @return array
      */
     public function update_meeting(string $meeting_id, array $params): array {
+        if ($this->has_delegated_token()) {
+            return $this->request('PATCH', '/me/onlineMeetings/' . urlencode($meeting_id), $params, true);
+        }
         return $this->request(
             'PATCH',
             '/users/' . urlencode($this->get_service_account_id()) . '/onlineMeetings/' . urlencode($meeting_id),
@@ -170,13 +199,18 @@ class graph {
     /**
      * Create a calendar event on the service account's calendar.
      *
-     * @param array $params  Event parameters
-     * @return array         Graph event object
+     * @param array $params   Event parameters
+     * @param array $options  Optional query parameters e.g. ['sendUpdates' => 'all']
+     * @return array          Graph event object
      */
-    public function create_event(array $params): array {
+    public function create_event(array $params, array $options = []): array {
+        $query = '';
+        if (!empty($options['sendUpdates'])) {
+            $query = '?sendUpdates=' . urlencode($options['sendUpdates']);
+        }
         return $this->request(
             'POST',
-            '/users/' . urlencode($this->get_service_account_id()) . '/events',
+            '/users/' . urlencode($this->get_service_account_id()) . '/events' . $query,
             $params
         );
     }
@@ -211,34 +245,6 @@ class graph {
     // -------------------------------------------------------------------------
     // Calendar events — user mailboxes (enrollee calendar push)
     // -------------------------------------------------------------------------
-
-    /**
-     * Push a calendar event to a specific user's Outlook calendar.
-     *
-     * @param string $user_email  Enrolees M365 email / UPN
-     * @param array  $params      Event parameters (subject, start, end, joinUrl etc.)
-     * @return array              Graph event object including id
-     */
-    public function push_event_to_user(string $user_email, array $params): array {
-        return $this->request(
-            'POST',
-            '/users/' . urlencode($user_email) . '/events',
-            $params
-        );
-    }
-
-    /**
-     * Remove a previously pushed calendar event from a user's calendar.
-     *
-     * @param string $user_email
-     * @param string $event_id    Graph event ID stored in msteamsecp_enrollee_events
-     */
-    public function remove_event_from_user(string $user_email, string $event_id): void {
-        $this->request(
-            'DELETE',
-            '/users/' . urlencode($user_email) . '/events/' . urlencode($event_id)
-        );
-    }
 
     // -------------------------------------------------------------------------
     // Attendance reports
@@ -324,7 +330,8 @@ class graph {
     // -------------------------------------------------------------------------
 
     /**
-     * Return a valid access token, fetching a new one if needed.
+     * Return a valid app-only access token (client credentials flow).
+     * Used for all Graph calls except meeting creation/update.
      *
      * @return string
      */
@@ -334,10 +341,6 @@ class graph {
         }
 
         $url  = 'https://login.microsoftonline.com/' . $this->tenant_id . '/oauth2/v2.0/token';
-
-        // Use native PHP curl for the token request — Moodle's curl wrapper
-        // can re-encode the POST body in ways that cause Azure to reject it
-        // with AADSTS7000216 (missing client_secret).
         $body = 'grant_type=client_credentials'
               . '&client_id=' . rawurlencode($this->client_id)
               . '&client_secret=' . rawurlencode($this->client_secret)
@@ -355,6 +358,7 @@ class graph {
         $raw  = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+
         if ($code < 200 || $code >= 300) {
             throw new \moodle_exception('error_graph_auth', 'mod_msteamsecp', '', $raw);
         }
@@ -370,6 +374,175 @@ class graph {
         return $this->token;
     }
 
+    /**
+     * Check the health of the delegated token and return a status array.
+     * Used by lib.php to surface reconnect notifications in web context.
+     *
+     * @return array {
+     *   'state'         => 'ok' | 'warning' | 'expired' | 'missing',
+     *   'message'       => string,
+     *   'reconnect_url' => string,
+     *   'age_days'      => int|null,
+     * }
+     */
+    public static function delegated_token_status(): array {
+        global $CFG;
+
+        $reconnect_url = (new \moodle_url('/mod/msteamsecp/oauth_authorize.php'))->out(false);
+        $has_token     = !empty(get_config('mod_msteamsecp', 'delegated_refresh_token'));
+        $stored_since  = (int) get_config('mod_msteamsecp', 'delegated_token_stored_at');
+        $age_days      = $stored_since ? (int) floor((time() - $stored_since) / 86400) : null;
+
+        if (!$has_token) {
+            return [
+                'state'         => 'missing',
+                'message'       => 'Service account not authorized. Meetings will use app-only token — facilitators may not have full co-organiser permissions.',
+                'reconnect_url' => $reconnect_url,
+                'age_days'      => null,
+            ];
+        }
+
+        // Warn at 75 days — refresh tokens expire at 90.
+        if ($age_days !== null && $age_days >= 75) {
+            return [
+                'state'         => 'warning',
+                'message'       => "Delegated token is {$age_days} days old and may expire soon (90-day limit). Re-authorize the service account to avoid disruption.",
+                'reconnect_url' => $reconnect_url,
+                'age_days'      => $age_days,
+            ];
+        }
+
+        return [
+            'state'         => 'ok',
+            'message'       => '',
+            'reconnect_url' => $reconnect_url,
+            'age_days'      => $age_days,
+        ];
+    }
+
+    /**
+     * Return a valid delegated access token, refreshing from the stored
+     * refresh token if needed. Used exclusively for meeting creation/update.
+     *
+     * @return string
+     * @throws \moodle_exception If no refresh token is stored or refresh fails
+     */
+    public function get_delegated_token(): string {
+        // Return cached token if still valid.
+        if ($this->delegated_token && time() < ($this->delegated_token_expires - 60)) {
+            return $this->delegated_token;
+        }
+
+        // Try the cached access token from config first.
+        $cached_access   = get_config('mod_msteamsecp', 'delegated_access_token');
+        $cached_expires  = (int) get_config('mod_msteamsecp', 'delegated_token_expires');
+        if ($cached_access && time() < ($cached_expires - 60)) {
+            $this->delegated_token         = $cached_access;
+            $this->delegated_token_expires = $cached_expires;
+            return $this->delegated_token;
+        }
+
+        // Refresh using stored refresh token.
+        $encrypted_refresh = get_config('mod_msteamsecp', 'delegated_refresh_token');
+        if (empty($encrypted_refresh)) {
+            throw new \moodle_exception('error_graph_auth', 'mod_msteamsecp', '',
+                'MSTEAMSECP_AUTH_MISSING: No delegated refresh token stored. Please authorize the service account in plugin settings.');
+        }
+
+        $refresh_token = self::decrypt_token($encrypted_refresh);
+        $url  = 'https://login.microsoftonline.com/' . $this->tenant_id . '/oauth2/v2.0/token';
+        $body = 'grant_type=refresh_token'
+              . '&client_id=' . rawurlencode($this->client_id)
+              . '&client_secret=' . rawurlencode($this->client_secret)
+              . '&refresh_token=' . rawurlencode($refresh_token)
+              . '&scope=' . rawurlencode('https://graph.microsoft.com/OnlineMeetings.ReadWrite offline_access');
+
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $url,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $body,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
+        ]);
+        $raw  = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        $data = json_decode($raw, true);
+
+        if ($code < 200 || $code >= 300 || empty($data['access_token'])) {
+            // Clear stored tokens so the settings page shows "not connected".
+            unset_config('delegated_refresh_token', 'mod_msteamsecp');
+            unset_config('delegated_access_token',  'mod_msteamsecp');
+            unset_config('delegated_token_expires',  'mod_msteamsecp');
+            unset_config('delegated_token_stored_at', 'mod_msteamsecp');
+
+            $error = $data['error'] ?? '';
+            $msg   = $data['error_description'] ?? $data['error'] ?? "HTTP $code";
+
+            // invalid_grant = refresh token expired or revoked.
+            $prefix = ($error === 'invalid_grant')
+                ? 'MSTEAMSECP_AUTH_EXPIRED'
+                : 'MSTEAMSECP_AUTH_FAILED';
+
+            throw new \moodle_exception('error_graph_auth', 'mod_msteamsecp', '',
+                $prefix . ': ' . $msg . '. Please re-authorize the service account.');
+        }
+
+        // Store new tokens — Microsoft issues a new refresh token each time.
+        $new_encrypted = self::encrypt_token($data['refresh_token']);
+        set_config('delegated_refresh_token',  $new_encrypted,          'mod_msteamsecp');
+        set_config('delegated_access_token',   $data['access_token'],   'mod_msteamsecp');
+        set_config('delegated_token_expires',  time() + ($data['expires_in'] ?? 3600), 'mod_msteamsecp');
+        // Preserve the original stored_at timestamp — only update on fresh auth.
+
+        $this->delegated_token         = $data['access_token'];
+        $this->delegated_token_expires = time() + ($data['expires_in'] ?? 3600);
+
+        return $this->delegated_token;
+    }
+
+    /**
+     * Check whether a valid delegated refresh token is stored.
+     *
+     * @return bool
+     */
+    public function has_delegated_token(): bool {
+        return !empty(get_config('mod_msteamsecp', 'delegated_refresh_token'));
+    }
+
+    /**
+     * Encrypt a token for storage using AES-256-CBC with a key derived
+     * from the Moodle site's $CFG->passwordsaltmain.
+     *
+     * @param string $token
+     * @return string  Base64-encoded IV + ciphertext
+     */
+    public static function encrypt_token(string $token): string {
+        global $CFG;
+        $key = substr(hash('sha256', $CFG->passwordsaltmain ?? $CFG->wwwroot, true), 0, 32);
+        $iv  = random_bytes(16);
+        $enc = openssl_encrypt($token, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
+        return base64_encode($iv . $enc);
+    }
+
+    /**
+     * Decrypt a token stored by encrypt_token().
+     *
+     * @param string $stored  Base64-encoded IV + ciphertext
+     * @return string         Plaintext token
+     */
+    public static function decrypt_token(string $stored): string {
+        global $CFG;
+        $key  = substr(hash('sha256', $CFG->passwordsaltmain ?? $CFG->wwwroot, true), 0, 32);
+        $raw  = base64_decode($stored);
+        $iv   = substr($raw, 0, 16);
+        $enc  = substr($raw, 16);
+        return openssl_decrypt($enc, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
+    }
+
     // -------------------------------------------------------------------------
     // HTTP core
     // -------------------------------------------------------------------------
@@ -377,21 +550,18 @@ class graph {
     /**
      * Make an authenticated Graph API request.
      *
-     * Uses Moodle's curl wrapper consistent with v1.1.0/v1.2.0 which were
-     * confirmed working. The Prefer header ensures the coorganizer role enum
-     * value is accepted and returned by Graph.
-     *
-     * @param string     $method   GET | POST | PATCH | DELETE
-     * @param string     $path     Graph path starting with /
-     * @param array|null $body     Request body (will be JSON-encoded)
-     * @return array               Decoded JSON response (empty array for 204)
+     * @param string     $method     GET | POST | PATCH | DELETE
+     * @param string     $path       Graph path starting with /
+     * @param array|null $body       Request body (will be JSON-encoded)
+     * @param bool       $delegated  If true, use delegated token instead of app-only token
+     * @return array                 Decoded JSON response (empty array for 204)
      */
-    public function request(string $method, string $path, ?array $body = null): array {
+    public function request(string $method, string $path, ?array $body = null, bool $delegated = false): array {
         $url  = self::GRAPH_BASE . $path;
         $curl = new \curl(['ignoresecurity' => true]);
         $curl->setopt(['CURLOPT_RETURNTRANSFER' => true, 'CURLOPT_TIMEOUT' => 60]);
         $curl->setHeader([
-            'Authorization: Bearer ' . $this->get_token(),
+            'Authorization: Bearer ' . ($delegated ? $this->get_delegated_token() : $this->get_token()),
             'Content-Type: application/json',
             'Accept: application/json',
             'Prefer: include-unknown-enum-members',

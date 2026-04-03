@@ -20,19 +20,17 @@ The community `mod_msteams` plugin routes meeting creation through an external i
 
 **No privacy policy or DPA:** Enovation's privacy and terms of use URLs in their app manifest both point to `enovation.ie` — the same domain that has experienced DNS and SSL outages. No Data Processing Agreement is publicly documented.
 
-**Self-hosting is possible but adds infrastructure burden:** The plugin does support self-hosting the meetingapp on your own infrastructure, but this adds a separate application to deploy, maintain, and secure — in addition to Moodle itself.
-
 `mod_msteamsecp` eliminates all of these concerns. All communication is directly between your MapleLMS server and Microsoft's Graph API over HTTPS. No third-party service is involved at any point in the meeting lifecycle. Your Azure credentials never leave your infrastructure, and there is no external availability dependency.
 
 ---
 
 ## Why This Plugin Exists
 
-The community `mod_msteams` plugin works as follows: when an instructor creates a meeting activity, an iframe loads an external third-party web application hosted at `enovation.ie/msteams`. The instructor schedules the meeting inside that iframe, and the resulting Teams join URL is captured into a hidden form field and stored in Moodle as a plain URL — functionally identical to the built-in `mod_url` resource, which it is actually built on top of.
+The community `mod_msteams` plugin works as follows: when an instructor creates a meeting activity, an iframe loads an external third-party web application hosted by Enovation. The instructor schedules the meeting inside that iframe, and the resulting Teams join URL is captured into a hidden form field and stored in Moodle as a plain URL — functionally identical to the built-in `mod_url` resource, which it is actually built on top of.
 
 This architecture has significant limitations:
 
-- **External dependency** — meeting creation depends on a third-party service at `enovation.ie` that is outside your control and could change or disappear
+- **External dependency** — meeting creation depends on a third-party service outside your control
 - **No Graph API integration** — Moodle never communicates with Microsoft directly; it only stores a URL
 - **No meeting settings** — lobby bypass, recording, presenter settings must be configured manually inside Teams after creation
 - **No automation** — nothing happens after the meeting is created; attendance, recordings, and calendar invites all require manual effort
@@ -51,11 +49,11 @@ This architecture has significant limitations:
 | Meeting creation | Via external iframe at enovation.ie | Direct Graph API call — no external dependency |
 | External service dependency | Yes — enovation.ie/msteams | None |
 | Graph API integration | None | Full |
-| Lobby bypass | Manual in Teams after creation | Governed by Teams meeting policy on the service account — co-organisers bypass automatically |
+| Lobby bypass | Manual in Teams after creation | Per-meeting setting via Graph API; default organizers and co-organizers |
 | Auto-record | Manual in Teams after creation | Toggle per meeting in Moodle form |
 | Recurring meetings | Not supported | Daily / weekly / monthly with day-of-week selection |
-| Co-organiser assignment | Not supported | Manual selection per meeting; presenter rights synced via Graph |
-| Enrollee calendar push | Not supported | Next occurrence pushed on enrol; advances automatically until completion |
+| Facilitator assignment | Not supported | Required per meeting; co-organiser role synced via Graph PATCH |
+| Enrollee calendar push | Not supported | Real Outlook/Teams invite sent on enrol; advances automatically until completion |
 | Calendar removal on completion | Not supported | Automatic on course completion or unenrolment |
 | Attendance tracking | Not supported | Automatic via Graph attendance reports |
 | Completion by attendance % | Not supported | Configurable threshold per meeting |
@@ -76,10 +74,36 @@ This architecture has significant limitations:
 Meetings are created programmatically via `POST /users/{id}/onlineMeetings` when the activity is saved in Moodle. No external service, no iframe, no manual URL copying. The instructor fills out a Moodle form and the meeting exists in Teams immediately.
 
 ### Lobby Bypass
-Lobby access is governed entirely by the Teams meeting policy assigned to the service account in the Teams Admin Center — not by any per-meeting setting in the plugin. With the policy set to **"Organizers and co-organizers only"**, co-organisers bypass the lobby automatically by virtue of their presenter role. Learners are held in the lobby until a co-organiser admits them, which is the correct behaviour for a managed training session. Because the service account (the technical organiser) is never present in the meeting, at least one co-organiser must always be assigned — this is enforced by the plugin form.
+Lobby access is configured per meeting via the Graph API. The default setting is **"Organizers and co-organizers"** — facilitators (who are assigned the co-organiser role via Graph PATCH) bypass the lobby automatically. Learners are held in the lobby until a facilitator admits them, which is the correct behaviour for a managed training session.
+
+The lobby bypass setting can be changed per meeting if needed. Available options:
+
+| Option | Who bypasses |
+|---|---|
+| Organizers and co-organizers *(default)* | Facilitators only |
+| People I invite | Anyone sent a calendar invite |
+| People in my organization and guests | All org members and guests |
+| People in my organization (excluding guests) | Org members only |
+| People in my organization, trusted organizations, and guests | Federated users included |
+| Everyone | No lobby |
+
+> **Note:** Teams Admin Center meeting policy settings on the service account can override per-meeting lobby settings. If lobby bypass is not working as expected, IT should verify that **"Let organizers override lobby settings"** is enabled in the policy assigned to the service account.
+
+### Facilitator Assignment
+At least one facilitator is required on every meeting — the form will not save without one. Facilitators receive a real Outlook/Teams calendar invite and are assigned the co-organiser role on the Teams meeting via Graph (`PATCH /onlineMeetings/{id}`), giving them full session control:
+
+- Bypass the lobby automatically
+- Start the meeting without the service account present
+- Admit learners from the lobby (`allowedLobbyAdmitters: organizerAndCoOrganizers`)
+- Manage recording
+- End the meeting for all participants
+
+The facilitator selector in the form is populated from enrolled users who hold a configurable set of Moodle roles (default: `editingteacher`, `teacher`, `manager`).
 
 ### Auto-Record
-A per-meeting toggle starts recording automatically when the meeting begins. Works in conjunction with the recording retrieval pipeline.
+A per-meeting toggle (`recordAutomatically`) starts recording automatically when the meeting begins. `allowRecording` and `allowTranscription` are also set to `true` on all meetings. Works in conjunction with the recording retrieval pipeline.
+
+> **Note:** Auto-record requires cloud recording to be enabled in the Teams meeting policy assigned to the service account. If recording does not start automatically, IT should verify **"Cloud recording"** and **"Who can record"** are configured permissively in the policy.
 
 ### Recurring Meetings
 Full recurrence support with daily, weekly, and monthly patterns. Weekly recurrence supports specific day-of-week selection (e.g. every Monday and Wednesday). Series can end by date or occurrence count. Each occurrence is tracked individually with its own attendance report and recording.
@@ -87,233 +111,91 @@ Full recurrence support with daily, weekly, and monthly patterns. Weekly recurre
 ### Recording Behavior (Recurring)
 For recurring meetings, recordings can either be appended (one recording activity per occurrence, building an archive) or replaced (the recording activity is updated in place, always showing the most recent session).
 
-### Co-organiser Assignment
-At least one co-organiser is required on every meeting — the form will not save without one. Co-organisers are given presenter rights on the Teams meeting via Graph (`PATCH /onlineMeetings`), allowing them to start the meeting, admit participants from the lobby, manage recording, and control the session. Because the Teams meeting policy is set to "Organizers and co-organizers only" for lobby bypass, co-organisers are also the gatekeepers — learners cannot enter until a co-organiser is present. Requires the Application Access Policy to be configured by IT (see IT Admin Setup below).
-
 ### Enrollee Calendar Push — Rolling Single-Occurrence Model
-When a user enrols in a course containing a Teams meeting activity, the plugin pushes **only the next upcoming occurrence** to their Outlook/Teams calendar — not the entire series. This keeps calendars clean and avoids showing a year's worth of sessions at once.
+When a user enrols in a course containing a Teams meeting activity, the plugin pushes **only the next upcoming occurrence** as a real Outlook/Teams invitation — not the entire series. This keeps calendars clean and avoids showing a year's worth of sessions at once. The learner receives an email notification and a Teams calendar notification.
 
-After each occurrence ends and attendance is processed, the plugin automatically pushes the next occurrence to any enrolled user who has not yet earned completion credit. This continues until the user attends a qualifying session (triggering course completion) or is unenrolled — at which point the calendar event is removed.
+After each occurrence ends and attendance is processed, the plugin automatically pushes the next occurrence to any enrolled user who has not yet earned completion credit. This continues until the user attends a qualifying session (triggering course completion) or is unenrolled — at which point future calendar invites are removed and a cancellation is sent.
 
 **The full lifecycle for a recurring orientation-style event:**
-1. Learner enrols → one occurrence appears on their Teams calendar
-2. They attend and meet the threshold → credit granted → course complete → calendar event removed
-3. They don't attend (or don't meet the threshold) → next occurrence pushed to their calendar automatically
+1. Learner enrols → one occurrence appears on their Teams calendar with a proper invite
+2. They attend and meet the threshold → credit granted → course complete → future events removed
+3. They don't attend (or don't meet the threshold) → next occurrence invite pushed automatically
 4. Steps 2–3 repeat until they complete or are unenrolled
 
 ### Attendance Tracking
-After each meeting ends, a scheduled task fetches the attendance report from Graph. Per-user join time, leave time, total duration, and attendance percentage are stored per occurrence. No manual effort required.
+After each meeting ends (with a 20-minute grace period for Teams to generate the report), a scheduled task fetches the attendance report from Graph. Per-user join time, leave time, total duration, and attendance percentage are stored per occurrence. No manual effort required.
 
 ### Completion by Attendance
 Each meeting has a configurable attendance threshold (0–100%). Setting it to 0 grants credit for any join. Setting it to 75 requires the user to have been present for at least 75% of the meeting duration. Credit is granted automatically — no manual grading.
 
 ### Recording Retrieval
-After each meeting ends, the scheduled task polls Graph for recording availability. Once ready, the recording is downloaded from OneDrive and stored as a standard Moodle file resource in a plugin-managed "Session Recordings" course section, created automatically if it doesn't exist.
+After each meeting ends, the scheduled task checks for a recording in Graph (`GET /onlineMeetings/{id}/recordings`). When available, it downloads the MP4 and creates a Moodle `resource` activity in the designated recordings section of the course. Works for automatic recordings; manual upload is also supported for recordings captured outside the automated flow.
 
-### Recording Upload (Manual Mode)
-In manual mode, instructors see an upload button on ended sessions and upload the video file directly into Moodle, stored as a resource activity in the same Session Recordings section.
-
-### Completion by Recording
-Recording activities created by the plugin use Moodle's standard completion system. Instructors configure completion conditions (view, mark as done, etc.) through the normal course completion UI.
-
-### Post-Event Processor
-A scheduled task runs every 15 minutes handling all post-event automation: marking ended occurrences, fetching attendance reports, processing completion credit, polling for recordings, downloading and storing recording files, creating recording activities, and advancing enrolled users to their next occurrence.
-
-### Learner View
-- Upcoming: countdown, join button
-- Live: prominent join button with live badge
-- Ended: recording link if available, attendance summary with credit status
-- Recurring series: table of all occurrences with individual status, join links, and recording links
-- New enrollees: access to all past recordings retroactively
-
----
-
-## Requirements
-
-- Moodle 4.0+ / MapleLMS
-- PHP 8.0+
-- Microsoft 365 tenant
-- Azure app registration with Application permissions (see IT Admin Setup below)
-- A licensed Microsoft 365 service account used as the technical meeting organiser
-- Teams Application Access Policy configured by a Teams administrator (see IT Admin Setup below)
+> **Note:** Recording retrieval via Graph may not work reliably for meetings created via `POST /onlineMeetings` (standalone meetings without a calendar event). If recording retrieval fails consistently, this is a known Graph API limitation — see Known Limitations below.
 
 ---
 
 ## IT Admin Setup
 
-This section covers everything IT needs to configure before the plugin will function. There are four distinct areas: Azure app registration, the service account, Teams PowerShell policy, and the Teams meeting policy. All four are required.
+### Azure App Registration
 
----
-
-### 1. Azure App Registration
-
-The plugin authenticates to Microsoft Graph using the OAuth 2.0 client credentials flow (app-only, no user sign-in). This requires an app registration in your Azure AD tenant.
-
-#### Create the App Registration
-
-1. Sign in to the [Azure Portal](https://portal.azure.com) as a Global Administrator or Application Administrator
-2. Navigate to **Azure Active Directory → App registrations → New registration**
-3. Set the following:
-   - **Name:** `MapleLMS Teams Integration` (or similar)
-   - **Supported account types:** Accounts in this organizational directory only (single tenant)
-   - **Redirect URI:** Leave blank — this app uses client credentials, not user sign-in
-4. Click **Register**
-5. Note the **Application (client) ID** and **Directory (tenant) ID** from the Overview page — these go into the plugin settings
-
-#### Add API Permissions
-
-Navigate to **API permissions → Add a permission → Microsoft Graph → Application permissions** and add all of the following:
+1. Create an app registration in Azure Active Directory
+2. Add the following **Application permissions** (not Delegated) and grant admin consent:
 
 | Permission | Purpose |
 |---|---|
-| `OnlineMeetings.ReadWrite` | Create, update, and delete Teams meetings |
-| `Calendars.ReadWrite` | Create and remove calendar events on the service account and user mailboxes |
-| `OnlineMeetingRecording.Read.All` | Fetch recording files from OneDrive after meetings end |
-| `OnlineMeetingTranscript.Read.All` | Reserved for future transcript support |
-| `User.Read.All` | Resolve user UPNs to object IDs; look up co-organiser profiles |
+| `OnlineMeetings.ReadWrite.All` | Create, update, delete Teams meetings |
+| `Calendars.ReadWrite` | Create and manage calendar events for invites |
+| `OnlineMeetingRecording.Read.All` | Retrieve meeting recordings |
+| `OnlineMeetingTranscript.Read.All` | Retrieve meeting transcripts |
+| `User.Read.All` | Resolve facilitator email addresses to AAD object IDs |
 
-After adding all permissions, click **Grant admin consent for [your tenant]** and confirm. All permissions must show a green "Granted" status — the plugin will fail if any are missing consent.
+3. Create a client secret and note the Tenant ID, Client ID, and Client Secret for plugin configuration
 
-> **Note:** All of these are **Application permissions**, not Delegated. The plugin runs as a background service with no signed-in user context.
+### Service Account
 
-#### Create a Client Secret
+Create a dedicated Microsoft 365 user account (e.g. `mapleLMS@yourcompany.com`) with:
+- A Teams license (required for meeting creation)
+- An Exchange Online mailbox (required for calendar event creation)
+- A permissive Teams meeting policy (see below)
 
-1. Navigate to **Certificates & secrets → New client secret**
-2. Set a description (e.g. `MapleLMS Plugin`) and an expiry that fits your rotation policy
-3. Copy the **Value** immediately — it will not be shown again
-4. Store it securely; this goes into the plugin's Client Secret setting in MapleLMS
+This account is the technical organiser of all meetings. It never joins meetings in person.
 
-> **Security note:** Treat the client secret as a privileged credential. It grants application-level access to create meetings, read recordings, and write to user calendars across the entire tenant. Rotate it on a defined schedule and update the plugin setting when you do.
+### Application Access Policy (Teams PowerShell)
 
----
-
-### 2. Service Account
-
-The plugin creates all Teams meetings on behalf of a shared service account — this account is the meeting organiser in Teams. It must be a real licensed Microsoft 365 user account, not a resource mailbox or guest.
-
-#### Requirements
-
-- A standard Microsoft 365 user account with a license that includes **Microsoft Teams** and **Exchange Online** (e.g. Microsoft 365 E3/E5, or Teams Essentials + Exchange Online Plan 1)
-- The account must be a member of your organisation's Azure AD tenant (not a guest)
-- An active Exchange Online mailbox is required so calendar events can be created
-
-#### Recommended Account Configuration
-
-| Setting | Value |
-|---|---|
-| Display name | `Learning Help` or `MapleLMS Teams` |
-| UPN / email | A dedicated account e.g. `mapleLMS@yourcompany.com` |
-| License | Microsoft 365 E3 or equivalent (Teams + Exchange required) |
-| MFA | Excluded from interactive MFA enforcement (see note below) |
-| Password expiry | Set to never expire, or establish a rotation process |
-
-> **MFA note:** The plugin authenticates using the client credentials flow — it never signs in as the service account interactively. The service account's own MFA settings do not affect Graph API calls made by the plugin. However, if your tenant enforces MFA via conditional access for all accounts without exception, ensure the service account is placed in a conditional access exclusion group scoped to non-interactive service principals.
-
----
-
-### 3. Teams Application Access Policy (PowerShell)
-
-This is the most commonly missed step and the most likely cause of silent failures in production.
-
-By default, even with `OnlineMeetings.ReadWrite` granted and admin-consented, Graph API calls to `PATCH /users/{id}/onlineMeetings/{meetingId}` will return **404** for app-only tokens. This is a Teams-level access control layer that is entirely separate from Azure AD permissions. Microsoft requires an explicit **Application Access Policy** scoped to the service account UPN.
-
-Without this policy, the following plugin features will fail silently:
-- Updating meeting settings after initial creation (time changes, lobby toggle changes)
-- Assigning presenter rights to co-organisers
-
-#### Prerequisites
-
-The **Microsoft Teams PowerShell module** must be installed on your admin workstation:
+This step is **mandatory** — without it, all Graph API calls for online meetings will return 403 Forbidden.
 
 ```powershell
-Install-Module MicrosoftTeams -Force
-```
-
-You will need a Teams Administrator or Global Administrator account to run these commands.
-
-#### Create and Grant the Policy
-
-```powershell
-Connect-MicrosoftTeams
-
+# Step 1 — Create the policy
 New-CsApplicationAccessPolicy `
-    -Identity "MapleLMS-OnlineMeetings-Policy" `
-    -AppIds "<YOUR-CLIENT-ID>" `
-    -Description "Allows MapleLMS to manage Teams meetings via Graph API"
+    -Identity "MapleLMSMeetingPolicy" `
+    -AppIds "your-app-client-id-here" `
+    -Description "Allow MapleLMS plugin to manage Teams meetings"
 
+# Step 2 — Grant to the service account (use the AAD Object ID, not UPN)
 Grant-CsApplicationAccessPolicy `
-    -PolicyName "MapleLMS-OnlineMeetings-Policy" `
-    -Identity "<SERVICE-ACCOUNT-UPN>"
+    -PolicyName "MapleLMSMeetingPolicy" `
+    -Identity "service-account-aad-object-id"
 ```
 
-> **Propagation delay:** Policy changes in Teams can take up to 30 minutes to replicate across the tenant. Do not assume the policy is broken if PATCH calls still return 404 immediately after running these commands — wait at least 30 minutes before troubleshooting.
+> **Propagation:** Policy changes can take 30 minutes to several hours to take effect. Always wait at least 30 minutes before testing after making policy changes.
 
-#### Verify the Policy
+### Teams Meeting Policy
 
-```powershell
-Get-CsApplicationAccessPolicy -Identity "MapleLMS-OnlineMeetings-Policy"
-Get-CsApplicationAccessPolicy -Identity "<SERVICE-ACCOUNT-UPN>"
-```
+The following settings must be configured in the Teams Admin Center meeting policy assigned to the service account:
 
----
+| Setting | Required Value |
+|---|---|
+| Cloud recording | On |
+| Who can record | Organizers and co-organizers (or Everyone) |
+| Let organizers override lobby settings | On |
+| Auto-record | On (or leave off and use per-meeting setting) |
 
-### 4. Teams Meeting Policy — Lobby Bypass
-
-This setting is about a specific operational problem: the service account is the meeting organiser in Teams, but it is never actually present in the meeting. In Teams, if the organiser hasn't joined yet, participants can be held in the lobby with no one to admit them — even if an instructor is present.
-
-The correct policy setting for this plugin is **"Organizers and co-organizers only"**, not "People in my organization." Here's why each group is handled correctly:
-
-- **Service account (organiser)** — bypasses by policy, but is never present. This is fine.
-- **Co-organisers (instructors/facilitators)** — bypass by policy and land directly in the meeting, where they can start the session and admit learners.
-- **Learners** — held in the lobby until a co-organiser admits them. This is intentional. It ensures a facilitator is always present before the session begins, and it's why the plugin requires at least one co-organiser on every meeting.
-
-> **There is no per-meeting lobby bypass toggle in the plugin.** Lobby behaviour is set once at the Teams policy level and applies consistently to every meeting. This is simpler and more predictable than a per-meeting toggle.
-
-#### Configure in Teams Admin Center
-
-1. Sign in to the [Teams Admin Center](https://admin.teams.microsoft.com)
-2. Navigate to **Meetings → Meeting policies**
-3. Either edit the policy currently assigned to the service account, or create a new one
-4. Under **Meeting join & lobby**, set **Who can bypass the lobby** to **Organizers and co-organizers**
-5. Assign the policy to the service account:
-   - Go to **Users → Manage users**
-   - Find the service account user
-   - Under **Policies**, assign the meeting policy you configured
+Without **"Let organizers override lobby settings"** enabled, the per-meeting lobby bypass configured by the plugin will be ignored and the policy value will be enforced instead.
 
 ---
 
-### 5. IT Prerequisite Checklist
-
-Use this to confirm everything is in place before handing off to L&D for testing:
-
-| Step | Where | Done |
-|---|---|---|
-| App registration created in Azure AD | Azure Portal | ☐ |
-| All 5 API permissions added (Application type, not Delegated) | Azure Portal | ☐ |
-| Admin consent granted for all permissions | Azure Portal | ☐ |
-| Client secret created and value stored securely | Azure Portal | ☐ |
-| Service account licensed (Teams + Exchange Online) | M365 Admin Center | ☐ |
-| Service account excluded from interactive MFA enforcement | Azure AD / Conditional Access | ☐ |
-| `New-CsApplicationAccessPolicy` created with correct App ID | Teams PowerShell | ☐ |
-| `Grant-CsApplicationAccessPolicy` granted to service account UPN | Teams PowerShell | ☐ |
-| Meeting policy with lobby bypass configured | Teams Admin Center | ☐ |
-| Meeting policy assigned to service account | Teams Admin Center | ☐ |
-| Tenant ID, Client ID, Client Secret, Service Account UPN handed off to L&D | — | ☐ |
-
----
-
-## Installation
-
-1. Place the `msteamsecp` folder in `/path/to/moodle/mod/`
-2. Fix ownership: `chown -R www-data:www-data /path/to/moodle/mod/msteamsecp`
-3. Run `php admin/cli/upgrade.php --non-interactive` or visit `/admin/index.php`
-4. Configure plugin settings (see Configuration below)
-
-**Note:** The plugin folder must be named `msteamsecp` (no `mod_` prefix). The component name `mod_msteamsecp` is used internally by Moodle.
-
----
-
-## Configuration
+## Plugin Configuration
 
 **Site Administration → Plugins → Activity modules → Teams Meeting (ECP)**
 
@@ -323,7 +205,8 @@ Use this to confirm everything is in place before handing off to L&D for testing
 | Client ID | Azure app registration client ID |
 | Client Secret | Azure app registration client secret |
 | Service Account UPN | UPN of the shared organiser account e.g. `mapleLMS@yourcompany.com` |
-| Co-organiser roles | Comma-separated Moodle role shortnames. Default: `editingteacher,teacher,manager` |
+| Facilitator roles | Comma-separated Moodle role shortnames eligible to be selected as facilitators. Default: `editingteacher,teacher,manager` |
+| Default lobby bypass | Default "Who can bypass the lobby" for new meetings. Default: Organizers and co-organizers |
 | Auto-record by default | New meetings record automatically unless changed per meeting |
 | Default recording mode | Manual or automatic for new meetings |
 | Default attendance threshold % | Default minimum attendance for completion credit (0 = any join) |
@@ -338,7 +221,7 @@ For events where learners only need to attend once but the event recurs on a reg
 | Setting | Recommended Value |
 |---|---|
 | Meeting type | Recurring (daily / weekly / monthly as appropriate) |
-| Lobby bypass | On |
+| Lobby bypass | Organizers and co-organizers |
 | Auto-record | On (allows learners who miss their occurrence to watch the recording) |
 | Attendance threshold | 75% (adjust to your policy — 0 grants credit for any join) |
 | Activity completion | Enable, set to complete when attendance credit is granted |
@@ -355,13 +238,13 @@ mod_msteamsecp/
 ├── db/
 │   ├── install.xml          # 5 tables: instances, occurrences, attendance, enrollee_events, coorganisers
 │   ├── access.php           # Capabilities: view, addinstance, uploadrecording, viewattendance
-│   ├── upgrade.php          # Upgrade path from v1.0 → v1.1 (adds coorganisers table)
+│   ├── upgrade.php          # Upgrade path v1.0 → v1.3
 │   └── tasks.php            # Scheduled task: post-event processor (every 15 min)
 ├── classes/
 │   ├── api/
 │   │   └── graph.php        # Graph API client — meetings, events, attendance, recordings
 │   ├── sync/
-│   │   ├── meeting_creator.php      # Meeting creation, update, delete, co-organiser sync
+│   │   ├── meeting_creator.php      # Meeting creation, update, delete, facilitator sync
 │   │   ├── enrolment_handler.php    # Rolling calendar push on enrol; removal on complete/unenrol
 │   │   └── post_event_processor.php # Attendance, completion, recording, next-occurrence advance
 │   ├── task/
@@ -377,7 +260,7 @@ mod_msteamsecp/
 ├── lib.php                  # Moodle hooks: add/update/delete instance, enrolment observers
 ├── view.php                 # Learner-facing activity view
 ├── index.php                # Course-level meeting list
-├── ical.php                 # iCal feed for calendar integration
+├── ical.php                 # iCal (.ics) download endpoint
 ├── settings.php             # Plugin admin settings
 └── version.php
 ```
@@ -392,16 +275,27 @@ mod_msteamsecp/
 | `msteamsecp_occurrences` | One row per occurrence — status, recording cmid, attendance fetch state |
 | `msteamsecp_attendance` | One row per user per occurrence — join/leave times, duration %, credit |
 | `msteamsecp_enrollee_events` | One row per user per occurrence — Graph calendar event ID, removal state |
-| `msteamsecp_coorganisers` | Manually selected co-organisers per meeting instance |
+| `msteamsecp_coorganisers` | Manually selected facilitators per meeting instance |
+
+---
+
+## How the Scheduled Task Works
+
+The `process_events` task runs every 15 minutes and handles four things in order:
+
+1. **Mark ended occurrences** — any occurrence past its end time is moved to `ended` status
+2. **Fetch attendance** — for ended occurrences (with a 20-minute grace period), fetches the Graph attendance report and stores per-user records; grants completion credit where the threshold is met
+3. **Retrieve recordings** — for ended auto-record occurrences, checks Graph for a completed recording and creates a Moodle resource activity when available
+4. **Advance calendar push** — for each ended occurrence, pushes the next upcoming occurrence to all enrolled users who have not yet earned completion credit
 
 ---
 
 ## Known Limitations
 
 - Moodle mobile app not yet supported
-- Calendar event attendees (co-organisers on the service account calendar event) cannot be updated via Graph PATCH after creation for Teams online meeting events — attendees are set at creation time only. Presenter rights on the meeting itself can be updated at any time (requires Application Access Policy)
-- Graph does not allow PATCH on the calendar event time or subject after creation for Teams online meetings (returns 405). If a meeting time changes significantly, delete and recreate the activity
-- Attendance reports require `OnlineMeetingRecording.Read.All` — some tenant configurations may restrict this permission
+- Graph does not allow PATCH on the calendar event time or subject after creation for Teams online meeting-linked events (returns 405). If a meeting time changes significantly, delete and recreate the activity
+- Attendance and recording retrieval via Graph may not work reliably for standalone meetings created via `POST /onlineMeetings` that are not associated with a calendar event. This is a documented Graph API limitation — Microsoft recommends the Calendar Events API for reliable artifact access. If attendance or recording retrieval fails consistently, this is the likely cause
+- Teams Admin Center meeting policy settings on the service account can override per-meeting API settings for lobby bypass and recording. If settings applied by the plugin are not being honoured at runtime, IT should check the policy assigned to the service account and ensure organizer override is permitted
 
 ---
 
@@ -412,7 +306,9 @@ mod_msteamsecp/
 | 1.0.0 | Initial release — full Graph API integration, recurring meetings, attendance tracking, recording pipeline, calendar push/removal, co-organiser sync |
 | 1.1.0 | Added Privacy API (GDPR data export and anonymised deletion), backup/restore support, upgrade path, manual co-organiser selection per meeting |
 | 1.1.1 | Rolling calendar push — enrol pushes next occurrence only; post-attendance processor advances incomplete users one occurrence at a time |
-| 1.2.0 | Removed per-meeting lobby bypass toggle — lobby access is now governed by the Teams meeting policy on the service account ("Organizers and co-organizers only"). Co-organiser selection is now required on every meeting; form validation enforces this. Drops `lobby_bypass` database column via upgrade step |
+| 1.2.0 | Added co-organiser role sync via Graph PATCH; iCal download endpoint; Boost child theme compatibility fixes |
+| 1.3.0 | Per-meeting lobby bypass setting restored; facilitator label throughout UI; `allowedLobbyAdmitters` set; `allowRecording`/`allowTranscription` always true; enrollee calendar push switched to real Outlook/Teams invitations via service account calendar with `sendUpdates=all`; PATCH and DELETE fixed to use Moodle curl `->patch()` and `->delete()` correctly |
+| 1.4.0 | Dual-token architecture — meeting creation and update use a delegated (user) token via `/me/onlineMeetings` so Teams treats meetings as user-created, giving facilitators full co-organiser permissions immediately without the service account joining. All other calls (attendance, recordings, calendar events, user lookups) continue using the app-only token. One-time OAuth 2.0 authorization flow via plugin settings page; refresh token stored encrypted using AES-256-CBC; automatic silent refresh. Falls back to app-only token if no delegated token is configured. |
 
 ---
 

@@ -55,38 +55,6 @@ class enrolment_handler {
     }
 
     /**
-     * Check whether a user holds a co-organiser role in the given course.
-     *
-     * @param int $userid
-     * @param int $courseid
-     * @return bool
-     */
-    private function user_has_coorganiser_role(int $userid, int $courseid): bool {
-        global $DB;
-
-        $role_shortnames = array_filter(array_map('trim',
-            explode(',', get_config('mod_msteamsecp', 'coorganiser_roles') ?? 'editingteacher,teacher,manager')
-        ));
-
-        if (empty($role_shortnames)) {
-            return false;
-        }
-
-        $context = \context_course::instance($courseid);
-        list($in_sql, $params) = $DB->get_in_or_equal($role_shortnames, SQL_PARAMS_NAMED);
-        $params['userid']    = $userid;
-        $params['contextid'] = $context->id;
-
-        return $DB->record_exists_sql(
-            "SELECT ra.id
-               FROM {role_assignments} ra
-               JOIN {role} r ON r.id = ra.roleid AND r.shortname $in_sql
-              WHERE ra.userid = :userid AND ra.contextid = :contextid",
-            $params
-        );
-    }
-
-    /**
      * Push the next single upcoming occurrence to a user's calendar.
      *
      * On enrol we push only the immediately next occurrence rather than the
@@ -136,16 +104,33 @@ class enrolment_handler {
     public function push_single_event(object $instance, object $occurrence, object $user): void {
         global $DB;
 
+        if (empty($user->email)) {
+            return;
+        }
+
         try {
-            $event = $this->graph->push_event_to_user($user->email, [
-                'subject'               => $instance->name,
-                'body'                  => $this->build_event_body($instance->intro ?? ''),
-                'start'                 => ['dateTime' => $this->to_iso8601($occurrence->starttime), 'timeZone' => 'UTC'],
-                'end'                   => ['dateTime' => $this->to_iso8601($occurrence->endtime),   'timeZone' => 'UTC'],
-                'isOnlineMeeting'       => true,
-                'onlineMeetingProvider' => 'teamsForBusiness',
-                'onlineMeetingUrl'      => $instance->join_url ?? '',
-            ]);
+            // Add the learner as a required attendee on a calendar event that
+            // links to the existing Teams meeting via location and body.
+            // IMPORTANT: Do NOT set isOnlineMeeting or onlineMeetingProvider —
+            // that causes the Calendar API to create a brand new Teams meeting
+            // with a different meeting ID and passcode, ignoring our join_url.
+            $join_url = $instance->join_url ?? '';
+            $event = $this->graph->create_event([
+                'subject'   => $instance->name,
+                'body'      => $this->build_event_body_with_link($instance->intro ?? '', $join_url),
+                'start'     => ['dateTime' => $this->to_iso8601($occurrence->starttime), 'timeZone' => 'UTC'],
+                'end'       => ['dateTime' => $this->to_iso8601($occurrence->endtime),   'timeZone' => 'UTC'],
+                'location'  => ['displayName' => $join_url],
+                'attendees' => [
+                    [
+                        'emailAddress' => [
+                            'address' => $user->email,
+                            'name'    => fullname($user),
+                        ],
+                        'type' => 'required',
+                    ],
+                ],
+            ], ['sendUpdates' => 'all']);
 
             $DB->insert_record('msteamsecp_enrollee_events', (object) [
                 'instanceid'     => $instance->id,
@@ -157,7 +142,7 @@ class enrolment_handler {
             ]);
 
         } catch (\Throwable $e) {
-            debugging('msteamsecp: failed to push calendar event to user ' . $user->email . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
+            debugging('msteamsecp: failed to send Teams invitation to ' . $user->email . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
         }
     }
 
@@ -198,7 +183,9 @@ class enrolment_handler {
         foreach ($events as $ee) {
             if (!empty($ee->graph_event_id)) {
                 try {
-                    $this->graph->remove_event_from_user($user->email, $ee->graph_event_id);
+                    // Event now lives on the service account calendar — delete it there.
+                    // Graph will send a cancellation notification to the learner attendee.
+                    $this->graph->delete_event($ee->graph_event_id);
                 } catch (\Throwable $e) {
                     debugging('msteamsecp: failed to remove calendar event: ' . $e->getMessage(), DEBUG_DEVELOPER);
                 }
@@ -249,6 +236,26 @@ class enrolment_handler {
             . '<body style="font-family:\'Segoe UI\',\'Segoe WP\',sans-serif; font-size:14px; color:#242424;">';
         if ($safe !== '') {
             $content .= '<p style="margin:0 0 16px 0;">' . $safe . '</p>';
+        }
+        $content .= '</body></html>';
+        return ['contentType' => 'HTML', 'content' => $content];
+    }
+
+    private function build_event_body_with_link(string $description, string $join_url): array {
+        $safe = $description ? htmlspecialchars(strip_tags($description), ENT_QUOTES, 'UTF-8') : '';
+        $url  = htmlspecialchars($join_url, ENT_QUOTES, 'UTF-8');
+        $content = '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head>'
+            . '<body style="font-family:\'Segoe UI\',\'Segoe WP\',sans-serif; font-size:14px; color:#242424;">';
+        if ($safe !== '') {
+            $content .= '<p style="margin:0 0 16px 0;">' . $safe . '</p>';
+        }
+        if ($url) {
+            $content .= '<p style="margin:0 0 8px 0;">'
+                . '<a href="' . $url . '" style="color:#6264a7; font-weight:bold;">Join Microsoft Teams Meeting</a>'
+                . '</p>'
+                . '<p style="margin:0; font-size:12px; color:#666;">'
+                . '<a href="' . $url . '" style="color:#666;">' . $url . '</a>'
+                . '</p>';
         }
         $content .= '</body></html>';
         return ['contentType' => 'HTML', 'content' => $content];
