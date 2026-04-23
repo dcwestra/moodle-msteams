@@ -83,5 +83,52 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026040100, 'msteamsecp');
     }
 
+    if ($oldversion < 2026040200) {
+        // v1.4.5 — in-plugin recording player with watch-threshold completion.
+        $table = new xmldb_table('msteamsecp');
+
+        // attendance_requirement — controls whether learner must attend one or all occurrences.
+        $field = new xmldb_field('attendance_requirement', XMLDB_TYPE_CHAR, '10', null, XMLDB_NOTNULL, null, 'any');
+        if (!$dbman->field_exists($table, $field)) {
+            // Set existing rows to 'any' first to avoid NOT NULL constraint failure.
+            $DB->execute("UPDATE {msteamsecp} SET attendance_requirement = 'any' WHERE attendance_requirement IS NULL OR attendance_requirement = ''");
+            $dbman->add_field($table, $field);
+        }
+
+        // completion_attendance — whether attending a live session grants completion.
+        $field = new xmldb_field('completion_attendance', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        // completion_attendance_pct — minimum attendance % required for credit.
+        $field = new xmldb_field('completion_attendance_pct', XMLDB_TYPE_INTEGER, '3', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        // completion_recording — whether watching the recording grants completion.
+        $field = new xmldb_field('completion_recording', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        // Correct any recording_behavior mismatches from previous versions.
+        $DB->execute(
+            "UPDATE {msteamsecp}
+                SET recording_behavior = 'replace'
+              WHERE attendance_requirement = 'any'
+                AND recording_behavior = 'append'"
+        );
+
+        upgrade_mod_savepoint(true, 2026040200, 'msteamsecp');
+    }
+
+    if ($oldversion < 2026041300) {
+        // v1.4.7 — Moodle internal calendar events, custom_completion class,
+        // calendar API callbacks. No schema changes required.
+        upgrade_mod_savepoint(true, 2026041300, 'msteamsecp');
+    }
+
     return true;
 }

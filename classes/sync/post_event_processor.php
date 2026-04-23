@@ -18,9 +18,6 @@ namespace mod_msteamsecp\sync;
 
 defined('MOODLE_INTERNAL') || die();
 
-require_once($CFG->dirroot . '/course/lib.php');
-require_once($CFG->dirroot . '/mod/resource/lib.php');
-
 use mod_msteamsecp\api\graph;
 use mod_msteamsecp\sync\enrolment_handler;
 
@@ -127,7 +124,7 @@ class post_event_processor {
 
         mtrace("  msteamsecp: fetching attendance for occurrence {$occ->id}...");
 
-        $reports = $this->graph->get_attendance_reports($occ->graph_meeting_id ?? $occ->graph_occurrence_id);
+        $reports = $this->graph->get_attendance_reports($occ->graph_meeting_id);
 
         if (empty($reports)) {
             mtrace("  msteamsecp: no attendance reports yet for occurrence {$occ->id}, will retry.");
@@ -140,17 +137,33 @@ class post_event_processor {
 
         // Fetch full detail with attendance records.
         $full_report = $this->graph->get_attendance_report(
-            $occ->graph_meeting_id ?? $occ->graph_occurrence_id,
+            $occ->graph_meeting_id,
             $report_id
         );
 
-        $meeting_duration = $occ->endtime - $occ->starttime; // seconds
+        // Use actual meeting duration from the report if available.
+        // This handles meetings that run long or end early — fairer than
+        // using the scheduled duration as the denominator.
+        $actual_start = !empty($full_report['meetingStartDateTime'])
+            ? strtotime($full_report['meetingStartDateTime']) : null;
+        $actual_end   = !empty($full_report['meetingEndDateTime'])
+            ? strtotime($full_report['meetingEndDateTime']) : null;
+
+        if ($actual_start && $actual_end && $actual_end > $actual_start) {
+            $meeting_duration = $actual_end - $actual_start;
+        } else {
+            // Fall back to scheduled duration if report timestamps aren't available.
+            $meeting_duration = $occ->endtime - $occ->starttime;
+        }
 
         foreach ($full_report['attendanceRecords'] ?? [] as $record) {
             $email = $record['emailAddress'] ?? '';
             if (empty($email)) continue;
 
-            $user = $DB->get_record('user', ['email' => $email, 'deleted' => 0]);
+            // Use get_records in case of duplicate emails — take the first active match.
+            $users = $DB->get_records('user', ['email' => $email, 'deleted' => 0, 'suspended' => 0],
+                'id ASC', '*', 0, 1);
+            $user = reset($users);
             if (!$user) continue;
 
             // Sum all intervals to get total attended duration.
@@ -160,7 +173,7 @@ class post_event_processor {
             }
 
             $pct = $meeting_duration > 0
-                ? round(($total_seconds / $meeting_duration) * 100, 2)
+                ? min(100, round(($total_seconds / $meeting_duration) * 100, 2))
                 : 0;
 
             $first_join = !empty($record['attendanceIntervals'])
@@ -208,7 +221,7 @@ class post_event_processor {
 
             // Grant Moodle completion credit.
             if ($credit) {
-                $this->grant_completion($user->id, $occ->course, $occ->instanceid);
+                $this->maybe_grant_completion($user->id, $occ);
             }
         }
 
@@ -220,12 +233,13 @@ class post_event_processor {
 
         mtrace("  msteamsecp: attendance processed for occurrence {$occ->id}.");
 
-        // Advance incomplete users to their next occurrence.
-        // Any enrolled user who was present but didn't meet the threshold, or
-        // who didn't appear in the attendance report at all, still needs to
-        // attend a future session. Push the next occurrence to their calendar
-        // so they always have exactly one upcoming event showing.
-        $this->push_next_occurrence_for_incomplete_users($occ);
+        // In 'all' mode learners already have invites for every occurrence —
+        // no advancing needed. In 'any' mode push the next occurrence to
+        // users who still haven't earned completion credit.
+        $instance = $DB->get_record('msteamsecp', ['id' => $occ->instanceid]);
+        if ($instance && ($instance->attendance_requirement ?? 'any') === 'any') {
+            $this->push_next_occurrence_for_incomplete_users($occ);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -293,9 +307,14 @@ class post_event_processor {
     private function process_recording(object $occ): void {
         global $DB, $CFG;
 
-        mtrace("  msteamsecp: checking recording for occurrence {$occ->id}...");
+        mtrace("  msteamsecp: checking recording for occurrence {$occ->id} using meeting ID: " . ($occ->graph_meeting_id ?? 'MISSING'));
 
-        $recordings = $this->graph->get_recordings($occ->graph_meeting_id ?? $occ->graph_occurrence_id);
+        if (empty($occ->graph_meeting_id)) {
+            mtrace("  msteamsecp: no graph_meeting_id on occurrence {$occ->id}, cannot fetch recording.");
+            return;
+        }
+
+        $recordings = $this->graph->get_recordings($occ->graph_meeting_id);
 
         if (empty($recordings)) {
             mtrace("  msteamsecp: recording not ready yet for occurrence {$occ->id}, will retry.");
@@ -311,249 +330,201 @@ class post_event_processor {
             return;
         }
 
-        mtrace("  msteamsecp: downloading recording for occurrence {$occ->id}...");
-        $file_content = $this->graph->download_recording($content_url);
+        // Resolve the msteamsecp course module ID — needed for file context.
+        $module_id = $DB->get_field('modules', 'id', ['name' => 'msteamsecp']);
+        $occ->cmid = (int) $DB->get_field('course_modules', 'id', [
+            'module'   => $module_id,
+            'instance' => $occ->instanceid,
+        ]);
 
-        // Store as a Moodle file.
-        $filename   = $this->recording_filename($occ);
-        $filerecord = $this->store_moodle_file($file_content, $filename, $occ->course, $occ->instanceid);
-
-        // Ensure the recordings section exists.
-        $section_id = $this->ensure_recordings_section($occ->course, $occ->instanceid);
-
-        // Handle append vs replace.
-        if ($occ->recording_behavior === 'replace' && !empty($occ->recording_cmid)) {
-            $this->replace_recording_activity($occ, $filerecord, $section_id);
-        } else {
-            $cmid = $this->create_recording_activity($occ, $filerecord, $section_id);
-            $DB->update_record('msteamsecp_occurrences', (object) [
-                'id'              => $occ->id,
-                'recording_cmid'  => $cmid,
-                'recording_ready' => 1,
-            ]);
-        }
-
-        mtrace("  msteamsecp: recording created for occurrence {$occ->id}.");
-
-        // Update completion criteria to include the new recording activity.
-        $this->update_course_completion_criteria($occ->course);
-    }
-
-    /**
-     * Create a Moodle resource activity containing the recording.
-     *
-     * @param object $occ
-     * @param object $filerecord  Stored file record
-     * @param int    $section_id
-     * @return int   New course module ID
-     */
-    private function create_recording_activity(object $occ, object $filerecord, int $section_id): int {
-        global $DB;
-
-        $course   = $DB->get_record('course', ['id' => $occ->course], '*', MUST_EXIST);
-        $section  = $DB->get_record('course_sections', ['id' => $section_id], '*', MUST_EXIST);
-
-        // Build resource module record.
-        $resource = new \stdClass();
-        $resource->course       = $occ->course;
-        $resource->name         = $this->recording_title($occ);
-        $resource->intro        = '';
-        $resource->introformat  = FORMAT_HTML;
-        $resource->display      = RESOURCELIB_DISPLAY_EMBED; // Embed in page.
-        $resource->tobemigrated = 0;
-        $resource->legacyfiles  = 0;
-        $resource->filterfiles  = 0;
-        $resource->revision     = 1;
-        $resource->timemodified = time();
-
-        $resource->id = $DB->insert_record('resource', $resource);
-
-        // Add to course as a module.
-        $cm               = new \stdClass();
-        $cm->course       = $occ->course;
-        $cm->module       = $DB->get_field('modules', 'id', ['name' => 'resource']);
-        $cm->instance     = $resource->id;
-        $cm->section      = $section->section;
-        $cm->visible      = 1;
-        $cm->completion   = COMPLETION_TRACKING_MANUAL; // Learner clicks "Mark as done".
-        $cm->timemodified = time();
-
-        $cmid = add_course_module($cm);
-        course_add_cm_to_section($course, $cmid, $section->section);
-
-        // Attach the file to the resource module context.
-        $modulecontext = \context_module::instance($cmid);
-        $fs            = get_file_storage();
-        $fs->create_file_from_string(
-            [
-                'contextid' => $modulecontext->id,
-                'component' => 'mod_resource',
-                'filearea'  => 'content',
-                'itemid'    => 0,
-                'filepath'  => '/',
-                'filename'  => $filerecord->filename,
-            ],
-            $filerecord->content
-        );
-
-        rebuild_course_cache($occ->course, true);
-
-        return $cmid;
-    }
-
-    /**
-     * Replace the file on an existing recording activity (replace mode).
-     */
-    private function replace_recording_activity(object $occ, object $filerecord, int $section_id): void {
-        global $DB;
-
-        $cm = get_coursemodule_from_id('resource', $occ->recording_cmid);
-        if (!$cm) {
-            // Activity was deleted — create a fresh one.
-            $cmid = $this->create_recording_activity($occ, $filerecord, $section_id);
-            $DB->update_record('msteamsecp_occurrences', (object) [
-                'id'              => $occ->id,
-                'recording_cmid'  => $cmid,
-                'recording_ready' => 1,
-            ]);
+        if (empty($occ->cmid)) {
+            mtrace("  msteamsecp: could not resolve cmid for instance {$occ->instanceid}, skipping.");
             return;
         }
 
-        // Replace the file.
-        $context = \context_module::instance($occ->recording_cmid);
+        // Download to a temp file to avoid loading the entire binary into memory.
+        $tmp_path = $CFG->tempdir . '/msteamsecp_recording_' . $occ->id . '_' . time() . '.mp4';
+
+        mtrace("  msteamsecp: downloading recording for occurrence {$occ->id}...");
+
+        try {
+            $this->graph->download_recording_to_file($content_url, $tmp_path);
+        } catch (\Throwable $e) {
+            mtrace("  msteamsecp: recording download failed for occurrence {$occ->id}: " . $e->getMessage());
+            @unlink($tmp_path);
+            return;
+        }
+
+        if (!file_exists($tmp_path) || filesize($tmp_path) === 0) {
+            mtrace("  msteamsecp: recording download produced empty file for occurrence {$occ->id}.");
+            @unlink($tmp_path);
+            return;
+        }
+
+        mtrace("  msteamsecp: recording downloaded (" . round(filesize($tmp_path) / 1048576, 1) . " MB), storing...");
+
+        try {
+            $filename = 'recording_' . $occ->instanceid . '_' . $occ->id . '_' . date('Ymd', $occ->starttime) . '.mp4';
+
+            if ($occ->recording_behavior === 'replace' && !empty($occ->recording_cmid)) {
+                $this->replace_recording_activity($occ, $tmp_path, $filename, 0);
+            } else {
+                $anchor = $this->create_recording_activity($occ, $tmp_path, $filename, 0);
+                $DB->update_record('msteamsecp_occurrences', (object) [
+                    'id'              => $occ->id,
+                    'recording_cmid'  => $anchor,
+                    'recording_ready' => 1,
+                ]);
+            }
+
+            mtrace("  msteamsecp: recording stored for occurrence {$occ->id}.");
+
+        } finally {
+            @unlink($tmp_path);
+        }
+    }
+
+    /**
+     * Create a Moodle resource activity containing the downloaded recording file.
+     *
+     * @param object $occ
+     * @param string $tmp_path   Path to downloaded temp file on disk
+     * @param string $filename   Desired filename for the Moodle file
+     * @param int    $section_id
+     * @return int   New course module ID
+     */
+    private function create_recording_activity(object $occ, string $tmp_path, string $filename, int $section_id): int {
+        global $DB, $CFG;
+
+        // Store the recording file under the mod_msteamsecp component so it can
+        // be served via pluginfile.php and tracked for completion within the plugin.
+        // filearea='recording', itemid=$occ->id uniquely identifies each recording.
+        $context = \context_module::instance($occ->cmid ?? $this->get_cmid_for_instance($occ->instanceid));
         $fs      = get_file_storage();
-        $fs->delete_area_files($context->id, 'mod_resource', 'content');
-        $fs->create_file_from_string(
+
+        // Remove any previous recording for this occurrence.
+        $fs->delete_area_files($context->id, 'mod_msteamsecp', 'recording', $occ->id);
+
+        $fs->create_file_from_pathname(
             [
                 'contextid' => $context->id,
-                'component' => 'mod_resource',
-                'filearea'  => 'content',
-                'itemid'    => 0,
+                'component' => 'mod_msteamsecp',
+                'filearea'  => 'recording',
+                'itemid'    => $occ->id,
                 'filepath'  => '/',
-                'filename'  => $filerecord->filename,
+                'filename'  => $filename,
             ],
-            $filerecord->content
+            $tmp_path
         );
 
-        // Update the resource name to reflect the new date.
-        $DB->update_record('resource', (object) [
-            'id'           => $cm->instance,
-            'name'         => $this->recording_title($occ),
-            'timemodified' => time(),
+        // Return occ->id as the "cmid" — recording_cmid is repurposed as the
+        // file anchor (occurrence ID) so view.php knows a recording is stored.
+        return $occ->id;
+    }
+
+    /**
+     * Get the course module ID for a given msteamsecp instance.
+     */
+    private function get_cmid_for_instance(int $instanceid): int {
+        global $DB;
+        return (int) $DB->get_field('course_modules', 'id', [
+            'module'   => $DB->get_field('modules', 'id', ['name' => 'msteamsecp']),
+            'instance' => $instanceid,
         ]);
+    }
+
+    /**
+     * Add a newly created recording activity to the course completion criteria.
+     * Uses activity completion aggregation — any one activity completing is
+     * sufficient for course completion. Learners who already have completion
+     * (via attendance) are unaffected.
+     *
+     * @param int $courseid
+     * @param int $cmid  Course module ID of the recording activity
+     */
+    /**
+     * Replace the file on an existing recording activity (replace mode).
+     */
+    private function replace_recording_activity(object $occ, string $tmp_path, string $filename, int $section_id): void {
+        global $DB;
+
+        // Ensure cmid is resolved — may not be set if called outside process_recording.
+        if (empty($occ->cmid)) {
+            $occ->cmid = $this->get_cmid_for_instance($occ->instanceid);
+        }
+        if (empty($occ->cmid)) {
+            mtrace("  msteamsecp: could not resolve cmid for replace_recording on occurrence {$occ->id}, skipping.");
+            return;
+        }
+
+        $context = \context_module::instance($occ->cmid);
+        $fs      = get_file_storage();
+
+        $fs->delete_area_files($context->id, 'mod_msteamsecp', 'recording', $occ->id);
+        $fs->create_file_from_pathname(
+            [
+                'contextid' => $context->id,
+                'component' => 'mod_msteamsecp',
+                'filearea'  => 'recording',
+                'itemid'    => $occ->id,
+                'filepath'  => '/',
+                'filename'  => $filename,
+            ],
+            $tmp_path
+        );
 
         $DB->update_record('msteamsecp_occurrences', (object) [
             'id'              => $occ->id,
             'recording_ready' => 1,
         ]);
-
-        rebuild_course_cache($occ->course, true);
-    }
-
-    /**
-     * Ensure the plugin-managed "Session Recordings" section exists.
-     * Creates it if not present, stores the section ID on the instance.
-     *
-     * @param int $courseid
-     * @param int $instanceid
-     * @return int  Course section ID
-     */
-    private function ensure_recordings_section(int $courseid, int $instanceid): int {
-        global $DB;
-
-        // Check if we already have a section stored.
-        $instance = $DB->get_record('msteamsecp', ['id' => $instanceid]);
-
-        if (!empty($instance->recording_section_id)) {
-            $section = $DB->get_record('course_sections', ['id' => $instance->recording_section_id]);
-            if ($section) {
-                return $section->id;
-            }
-        }
-
-        $section_name = get_config('mod_msteamsecp', 'recording_section_name') ?: 'Session Recordings';
-
-        // Look for existing section with this name.
-        $existing = $DB->get_record_select(
-            'course_sections',
-            "course = :course AND " . $DB->sql_compare_text('name') . " = :name",
-            ['course' => $courseid, 'name' => $section_name]
-        );
-
-        if ($existing) {
-            $DB->update_record('msteamsecp', (object) [
-                'id'                  => $instanceid,
-                'recording_section_id' => $existing->id,
-            ]);
-            return $existing->id;
-        }
-
-        // Create a new section at the end of the course.
-        $course  = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
-        $max_seq = (int) $DB->get_field_sql('SELECT MAX(section) FROM {course_sections} WHERE course = ?', [$courseid]);
-
-        $section           = new \stdClass();
-        $section->course   = $courseid;
-        $section->section  = $max_seq + 1;
-        $section->name     = $section_name;
-        $section->summary  = '';
-        $section->summaryformat = FORMAT_HTML;
-        $section->visible  = 1;
-        $section->timemodified = time();
-        $section->id       = $DB->insert_record('course_sections', $section);
-
-        // Update course section count.
-        $DB->update_record('course', (object) [
-            'id'       => $courseid,
-            'numsections' => $max_seq + 1,
-        ]);
-
-        $DB->update_record('msteamsecp', (object) [
-            'id'                   => $instanceid,
-            'recording_section_id' => $section->id,
-        ]);
-
-        rebuild_course_cache($courseid, true);
-
-        return $section->id;
-    }
-
-    /**
-     * Temporarily store file content for use during activity creation.
-     * Returns a lightweight object with filename and content.
-     *
-     * @param string $content
-     * @param string $filename
-     * @param int    $courseid
-     * @param int    $instanceid
-     * @return object {filename, content}
-     */
-    private function store_moodle_file(string $content, string $filename, int $courseid, int $instanceid): object {
-        return (object) [
-            'filename' => $filename,
-            'content'  => $content,
-        ];
-    }
-
-    /**
-     * Update course completion criteria to include all recording activities.
-     * Uses "any activity" aggregation — completing any one recording grants credit.
-     *
-     * @param int $courseid
-     */
-    private function update_course_completion_criteria(int $courseid): void {
-        // Completion criteria updates are handled by the standard Moodle
-        // completion system — instructors configure this through the course
-        // completion settings UI. The plugin creates the activity with
-        // COMPLETION_TRACKING_MANUAL set, making it available for inclusion.
-        // Automatic criteria modification would override instructor preferences,
-        // so we deliberately leave this to the course editor.
-        rebuild_course_cache($courseid, true);
     }
 
     // -------------------------------------------------------------------------
     // Completion
     // -------------------------------------------------------------------------
+
+    /**
+     * Grant completion only if the user has met the attendance_requirement.
+     *
+     * 'any' mode: credit on this occurrence is sufficient — grant immediately.
+     * 'all' mode: only grant when the user has credit_granted = 1 on every
+     *             ended occurrence in the series (whether via live attendance
+     *             or recording watch).
+     *
+     * @param int    $userid
+     * @param object $occ  Occurrence record (must have instanceid and course)
+     */
+    private function maybe_grant_completion(int $userid, object $occ): void {
+        global $DB;
+
+        $instance = $DB->get_record('msteamsecp', ['id' => $occ->instanceid]);
+        if (!$instance) {
+            return;
+        }
+
+        if (($instance->attendance_requirement ?? 'any') !== 'all') {
+            // 'any' mode — one credit is enough.
+            $this->grant_completion($userid, $occ->course, $occ->instanceid);
+            return;
+        }
+
+        // 'all' mode — every ended occurrence must have credit for this user.
+        $ended_count = $DB->count_records_select(
+            'msteamsecp_occurrences',
+            "instanceid = :instanceid AND status = 'ended'",
+            ['instanceid' => $occ->instanceid]
+        );
+
+        $credited_count = $DB->count_records_select(
+            'msteamsecp_attendance',
+            'instanceid = :instanceid AND userid = :userid AND credit_granted = 1',
+            ['instanceid' => $occ->instanceid, 'userid' => $userid]
+        );
+
+        if ($ended_count > 0 && $credited_count >= $ended_count) {
+            $this->grant_completion($userid, $occ->course, $occ->instanceid);
+        }
+    }
 
     /**
      * Grant Moodle activity completion for a user on this meeting activity.
@@ -573,7 +544,7 @@ class post_event_processor {
             return;
         }
 
-        $completion->update_state($cm, COMPLETION_COMPLETE, $userid);
+        $completion->update_state($cm, \COMPLETION_COMPLETE, $userid);
     }
 
     // -------------------------------------------------------------------------
@@ -582,10 +553,6 @@ class post_event_processor {
 
     private function recording_title(object $occ): string {
         return $occ->meeting_name . ' — ' . userdate($occ->starttime, get_string('strftimedatefullshort', 'langconfig'));
-    }
-
-    private function recording_filename(object $occ): string {
-        return 'recording_' . $occ->instanceid . '_' . $occ->id . '_' . date('Ymd', $occ->starttime) . '.mp4';
     }
 
     private function to_iso8601(int $timestamp): string {

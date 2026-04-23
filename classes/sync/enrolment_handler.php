@@ -55,13 +55,10 @@ class enrolment_handler {
     }
 
     /**
-     * Push the next single upcoming occurrence to a user's calendar.
+     * Push calendar event(s) to a user's Outlook calendar.
      *
-     * On enrol we push only the immediately next occurrence rather than the
-     * entire series. After each occurrence ends, the post-event processor calls
-     * this again for users who still need to attend, advancing them one
-     * occurrence at a time. Users who complete the course have the event
-     * removed by on_course_complete() as usual — no change to that path.
+     * 'any' mode (attend once): push only the next upcoming occurrence not yet sent.
+     * 'all' mode (attend all):  push every upcoming occurrence not yet sent.
      *
      * @param object $instance  msteamsecp record
      * @param object $user      Moodle user record
@@ -69,7 +66,9 @@ class enrolment_handler {
     public function push_events_for_user(object $instance, object $user): void {
         global $DB;
 
-        // Get only the next occurrence not yet pushed to this user.
+        $all_mode = ($instance->attendance_requirement ?? 'any') === 'all';
+        $limit    = $all_mode ? '' : 'LIMIT 1';
+
         $sql = "SELECT occ.*
                   FROM {msteamsecp_occurrences} occ
              LEFT JOIN {msteamsecp_enrollee_events} ee
@@ -79,7 +78,7 @@ class enrolment_handler {
                    AND occ.starttime > :now
                    AND ee.id IS NULL
               ORDER BY occ.starttime ASC
-                 LIMIT 1";
+                       $limit";
 
         $occurrences = $DB->get_records_sql($sql, [
             'userid'     => $user->id,
@@ -109,28 +108,20 @@ class enrolment_handler {
         }
 
         try {
-            // Add the learner as a required attendee on a calendar event that
-            // links to the existing Teams meeting via location and body.
-            // IMPORTANT: Do NOT set isOnlineMeeting or onlineMeetingProvider —
-            // that causes the Calendar API to create a brand new Teams meeting
-            // with a different meeting ID and passcode, ignoring our join_url.
+            // Write the calendar event directly to the learner's own Outlook calendar.
+            // Do NOT use create_event (service account calendar) — even without
+            // isOnlineMeeting set, the Calendar API automatically creates a new Teams
+            // meeting when called in the context of the Teams-licensed service account,
+            // generating a different meeting ID and passcode for the learner.
+            // Writing to /users/{email}/events on the learner's calendar avoids this.
             $join_url = $instance->join_url ?? '';
-            $event = $this->graph->create_event([
-                'subject'   => $instance->name,
-                'body'      => $this->build_event_body_with_link($instance->intro ?? '', $join_url),
-                'start'     => ['dateTime' => $this->to_iso8601($occurrence->starttime), 'timeZone' => 'UTC'],
-                'end'       => ['dateTime' => $this->to_iso8601($occurrence->endtime),   'timeZone' => 'UTC'],
-                'location'  => ['displayName' => $join_url],
-                'attendees' => [
-                    [
-                        'emailAddress' => [
-                            'address' => $user->email,
-                            'name'    => fullname($user),
-                        ],
-                        'type' => 'required',
-                    ],
-                ],
-            ], ['sendUpdates' => 'all']);
+            $event = $this->graph->create_user_event($user->email, [
+                'subject'  => $instance->name,
+                'body'     => $this->build_event_body_with_link($instance->intro ?? '', $join_url),
+                'start'    => ['dateTime' => $this->to_iso8601($occurrence->starttime), 'timeZone' => 'UTC'],
+                'end'      => ['dateTime' => $this->to_iso8601($occurrence->endtime),   'timeZone' => 'UTC'],
+                'location' => ['displayName' => $join_url],
+            ]);
 
             $DB->insert_record('msteamsecp_enrollee_events', (object) [
                 'instanceid'     => $instance->id,
@@ -142,7 +133,7 @@ class enrolment_handler {
             ]);
 
         } catch (\Throwable $e) {
-            debugging('msteamsecp: failed to send Teams invitation to ' . $user->email . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
+            debugging('msteamsecp: failed to send Teams invitation to ' . $user->email . ': ' . $e->getMessage(), \DEBUG_DEVELOPER);
         }
     }
 
@@ -183,11 +174,10 @@ class enrolment_handler {
         foreach ($events as $ee) {
             if (!empty($ee->graph_event_id)) {
                 try {
-                    // Event now lives on the service account calendar — delete it there.
-                    // Graph will send a cancellation notification to the learner attendee.
-                    $this->graph->delete_event($ee->graph_event_id);
+                    // Event lives on the learner's calendar — delete it there.
+                    $this->graph->delete_user_event($user->email, $ee->graph_event_id);
                 } catch (\Throwable $e) {
-                    debugging('msteamsecp: failed to remove calendar event: ' . $e->getMessage(), DEBUG_DEVELOPER);
+                    debugging('msteamsecp: failed to remove calendar event: ' . $e->getMessage(), \DEBUG_DEVELOPER);
                 }
             }
 
@@ -230,31 +220,22 @@ class enrolment_handler {
      * @param string $description  Optional plain-text description (e.g. course intro)
      * @return array               Graph body object {contentType, content}
      */
-    private function build_event_body(string $description = ''): array {
-        $safe = $description ? htmlspecialchars(strip_tags($description), ENT_QUOTES, 'UTF-8') : '';
-        $content = '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head>'
-            . '<body style="font-family:\'Segoe UI\',\'Segoe WP\',sans-serif; font-size:14px; color:#242424;">';
-        if ($safe !== '') {
-            $content .= '<p style="margin:0 0 16px 0;">' . $safe . '</p>';
-        }
-        $content .= '</body></html>';
-        return ['contentType' => 'HTML', 'content' => $content];
-    }
-
     private function build_event_body_with_link(string $description, string $join_url): array {
         $safe = $description ? htmlspecialchars(strip_tags($description), ENT_QUOTES, 'UTF-8') : '';
         $url  = htmlspecialchars($join_url, ENT_QUOTES, 'UTF-8');
         $content = '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head>'
-            . '<body style="font-family:\'Segoe UI\',\'Segoe WP\',sans-serif; font-size:14px; color:#242424;">';
+            . '<body style="font-family:\'Segoe UI\',\'Segoe WP\',sans-serif;font-size:14px;color:#242424;">';
         if ($safe !== '') {
             $content .= '<p style="margin:0 0 16px 0;">' . $safe . '</p>';
         }
+        $content .= '<p style="font-size:15px;font-weight:600;margin:0 0 12px 0;">Microsoft Teams meeting</p>';
         if ($url) {
-            $content .= '<p style="margin:0 0 8px 0;">'
-                . '<a href="' . $url . '" style="color:#6264a7; font-weight:bold;">Join Microsoft Teams Meeting</a>'
+            $content .= '<p style="margin:0 0 12px 0;">'
+                . '<a href="' . $url . '" style="color:#6264a7;font-weight:600;text-decoration:none;">Join the meeting</a>'
                 . '</p>'
-                . '<p style="margin:0; font-size:12px; color:#666;">'
-                . '<a href="' . $url . '" style="color:#666;">' . $url . '</a>'
+                . '<p style="margin:0;font-size:12px;color:#666;">If the button doesn\'t work, use this link:</p>'
+                . '<p style="margin:4px 0 0 0;font-size:12px;color:#666;">'
+                . '<a href="' . $url . '" style="color:#666;text-decoration:none;">' . $url . '</a>'
                 . '</p>';
         }
         $content .= '</body></html>';

@@ -2,12 +2,19 @@
 /**
  * Learner-facing view of a Teams meeting activity.
  *
- * Shows:
- *  - Meeting title, description, start/end time
- *  - Join button (live) or status badge (upcoming/ended)
- *  - For recurring: list of all occurrences with individual join links
- *  - Recordings section with links to recorded activities
- *  - Attendance summary for the current user
+ * Behaviour by recording_behavior setting:
+ *
+ *  replace mode (recurring):
+ *    - Shows only the most recent ended occurrence with a recording
+ *    - Shows only the next upcoming occurrence
+ *
+ *  append mode (recurring):
+ *    - Shows all occurrences in a table
+ *    - Ended occurrences with recordings show an inline expandable player
+ *
+ *  Single meeting: always shows the single occurrence with inline player if ready.
+ *
+ *  Join button: only available 15 minutes before start through end of meeting.
  *
  * @package    mod_msteamsecp
  * @copyright  2026 Eyecare Partners
@@ -17,10 +24,10 @@
 require_once('../../config.php');
 require_once($CFG->dirroot . '/mod/msteamsecp/lib.php');
 
-$id = required_param('id', PARAM_INT); // Course module ID.
+$id = required_param('id', PARAM_INT);
 
-$cm      = get_coursemodule_from_id('msteamsecp', $id, 0, false, MUST_EXIST);
-$course  = $DB->get_record('course', ['id' => $cm->course], '*', MUST_EXIST);
+$cm       = get_coursemodule_from_id('msteamsecp', $id, 0, false, MUST_EXIST);
+$course   = $DB->get_record('course', ['id' => $cm->course], '*', MUST_EXIST);
 $instance = $DB->get_record('msteamsecp', ['id' => $cm->instance], '*', MUST_EXIST);
 
 require_login($course, true, $cm);
@@ -36,46 +43,111 @@ $PAGE->set_heading($course->fullname);
 echo $OUTPUT->header();
 echo $OUTPUT->heading(format_string($instance->name));
 
-// Description.
 if (!empty($instance->intro)) {
     echo $OUTPUT->box(format_module_intro('msteamsecp', $instance, $cm->id), 'generalbox mod_introbox');
 }
 
 $now         = time();
+$join_window = 15 * 60; // 15 minutes before start.
 $occurrences = $DB->get_records('msteamsecp_occurrences',
     ['instanceid' => $instance->id], 'starttime ASC');
 
 if (empty($occurrences)) {
     echo $OUTPUT->notification(get_string('no_occurrences', 'mod_msteamsecp'), 'info');
+    $PAGE->requires->strings_for_js(['recording_completion_granted'], 'mod_msteamsecp');
     echo $OUTPUT->footer();
     exit;
 }
 
-// ── Single meeting view ──────────────────────────────────────────────────────
+// ── Single meeting ────────────────────────────────────────────────────────────
 if (!$instance->is_recurring) {
     $occ = reset($occurrences);
-    echo msteamsecp_render_occurrence($occ, $instance, $context, $now, $USER->id, $DB, $cm);
+    echo msteamsecp_render_occurrence($occ, $instance, $context, $now, $join_window, $USER->id, $DB, $cm);
+
+// ── Recurring — replace mode ──────────────────────────────────────────────────
+} elseif ($instance->recording_behavior === 'replace') {
+
+    $last_recording = null;
+    foreach (array_reverse(array_values($occurrences)) as $occ) {
+        if ($occ->recording_ready && !empty($occ->recording_cmid)) {
+            $last_recording = $occ;
+            break;
+        }
+    }
+
+    $next_occurrence = null;
+    foreach ($occurrences as $occ) {
+        if ($occ->endtime > $now) {
+            $next_occurrence = $occ;
+            break;
+        }
+    }
+
+    // ── Next session first ────────────────────────────────────────────────
+    if ($next_occurrence) {
+        echo html_writer::tag('h3', get_string('next_session', 'mod_msteamsecp'));
+        // Render occurrence but suppress its inline recording player — we show
+        // the recording separately below as a collapsible.
+        echo msteamsecp_render_occurrence($next_occurrence, $instance, $context, $now, $join_window, $USER->id, $DB, $cm, true);
+    }
+
+    // ── Recording second — collapsible with date title ────────────────────
+    if ($last_recording) {
+        $rec_date  = userdate($last_recording->starttime, '%m/%d/%Y');
+        $rec_title = get_string('session_recording', 'mod_msteamsecp') . ' — ' . $rec_date;
+        $toggle_id = 'msteamsecp-rec-collapse-' . $last_recording->id;
+
+        echo html_writer::tag('h3',
+            html_writer::tag('button', $rec_title . ' ▾', [
+                'class'         => 'btn btn-link p-0 font-weight-bold',
+                'type'          => 'button',
+                'data-toggle'   => 'collapse',
+                'data-target'   => '#' . $toggle_id,
+                'aria-expanded' => 'false',
+                'style'         => 'font-size:1.1rem;',
+            ]),
+            ['style' => 'margin-top:1.5rem;']
+        );
+        echo html_writer::div(
+            msteamsecp_render_recording_player(
+                (int) $last_recording->recording_cmid,
+                $last_recording->id,
+                $context, $cm, $PAGE
+            ),
+            'collapse',
+            ['id' => $toggle_id]
+        );
+    }
+
+    if (!$last_recording && !$next_occurrence) {
+        echo $OUTPUT->notification(get_string('all_sessions_ended', 'mod_msteamsecp'), 'info');
+    }
+
+// ── Recurring — append mode ───────────────────────────────────────────────────
 } else {
-    // ── Recurring meeting view ────────────────────────────────────────────
+
     echo html_writer::tag('h3', get_string('occurrences', 'mod_msteamsecp'));
-    $table = new html_table();
+
+    $table       = new html_table();
     $table->head = [
         get_string('occurrence_date', 'mod_msteamsecp'),
-        get_string('status', 'mod_msteamsecp'),
-        get_string('join', 'mod_msteamsecp'),
-        get_string('recording', 'mod_msteamsecp'),
-        get_string('attendance', 'mod_msteamsecp'),
+        get_string('status',          'mod_msteamsecp'),
+        get_string('join',            'mod_msteamsecp'),
+        get_string('recording',       'mod_msteamsecp'),
+        get_string('attendance',      'mod_msteamsecp'),
     ];
     $table->data = [];
 
     foreach ($occurrences as $occ) {
-        $table->data[] = msteamsecp_occurrence_row($occ, $instance, $context, $now, $USER->id, $DB, $cm);
+        $table->data[] = msteamsecp_occurrence_row(
+            $occ, $instance, $context, $now, $join_window, $USER->id, $DB, $cm
+        );
     }
 
     echo html_writer::table($table);
 }
 
-// ── Attendance summary ───────────────────────────────────────────────────────
+// ── Attendance summary ────────────────────────────────────────────────────────
 $attendance_records = $DB->get_records('msteamsecp_attendance',
     ['instanceid' => $instance->id, 'userid' => $USER->id]);
 
@@ -93,71 +165,69 @@ if (!empty($attendance_records)) {
     }
 }
 
+$PAGE->requires->strings_for_js(['recording_completion_granted'], 'mod_msteamsecp');
 echo $OUTPUT->footer();
 
-// ── Render helpers ────────────────────────────────────────────────────────────
+// ── Render helpers ─────────────────────────────────────────────────────────────
 
 function msteamsecp_render_occurrence(
     object $occ, object $instance, context_module $context,
-    int $now, int $userid, \moodle_database $DB, object $cm
+    int $now, int $join_window, int $userid, \moodle_database $DB, object $cm,
+    bool $suppress_recording = false
 ): string {
-    global $OUTPUT;
-    $out = '';
+    global $OUTPUT, $PAGE;
+    $out        = '';
+    $join_opens = $occ->starttime - $join_window;
 
-    // Time display.
-    $out .= html_writer::tag('p',
-        userdate($occ->starttime) . ' – ' . userdate($occ->endtime)
-    );
+    $out .= html_writer::tag('p', userdate($occ->starttime) . ' – ' . userdate($occ->endtime));
 
-    // Status + join button.
-    if ($occ->status === 'upcoming' && $occ->starttime > $now) {
-        $out .= html_writer::tag('p',
-            get_string('starts_in', 'mod_msteamsecp', format_time($occ->starttime - $now))
-        );
+    if ($occ->endtime > $now && $occ->starttime <= $now) {
+        // Live.
+        $out .= html_writer::span(get_string('live_now', 'mod_msteamsecp'), 'badge badge-danger');
         if (!empty($instance->join_url)) {
-            $out .= html_writer::link(
+            $out .= ' ' . html_writer::link(
                 $instance->join_url,
-                get_string('join_meeting', 'mod_msteamsecp'),
-                ['class' => 'btn btn-primary', 'target' => '_blank']
+                get_string('join_now', 'mod_msteamsecp'),
+                ['class' => 'btn btn-danger', 'target' => '_blank']
             );
         }
-        $out .= ' ' . html_writer::link(
-            new moodle_url('/mod/msteamsecp/ical.php', [
-                'cmid'         => $cm->id,
-                'occurrenceid' => $occ->id,
-            ]),
+
+    } elseif ($occ->starttime > $now) {
+        // Upcoming.
+        if ($now >= $join_opens) {
+            $out .= html_writer::tag('p',
+                get_string('starts_in', 'mod_msteamsecp', format_time($occ->starttime - $now))
+            );
+            if (!empty($instance->join_url)) {
+                $out .= html_writer::link(
+                    $instance->join_url,
+                    get_string('join_meeting', 'mod_msteamsecp'),
+                    ['class' => 'btn btn-primary', 'target' => '_blank']
+                );
+                $out .= ' ';
+            }
+        } else {
+            $out .= html_writer::tag('p',
+                get_string('join_opens_in', 'mod_msteamsecp', format_time($join_opens - $now))
+            );
+        }
+        $out .= html_writer::link(
+            new moodle_url('/mod/msteamsecp/ical.php', ['cmid' => $cm->id, 'occurrenceid' => $occ->id]),
             get_string('add_to_calendar', 'mod_msteamsecp'),
             ['class' => 'btn btn-outline-secondary btn-sm']
         );
-    } elseif ($occ->endtime > $now && $occ->starttime <= $now) {
-        // Currently live.
-        $out .= html_writer::span(get_string('live_now', 'mod_msteamsecp'), 'badge badge-danger');
-        if (!empty($instance->join_url)) {
-            $out .= ' ' . $OUTPUT->single_button(
-                new moodle_url($instance->join_url),
-                get_string('join_now', 'mod_msteamsecp'),
-                'get', ['class' => 'btn-danger']
-            );
-        }
+
     } else {
+        // Ended.
         $out .= html_writer::span(get_string('meeting_ended', 'mod_msteamsecp'), 'badge badge-secondary');
     }
 
-    // Recording.
-    if ($occ->recording_ready && !empty($occ->recording_cmid)) {
-        $recording_cm = get_coursemodule_from_id('resource', $occ->recording_cmid);
-        if ($recording_cm) {
-            $out .= html_writer::tag('p',
-                html_writer::link(
-                    new moodle_url('/mod/resource/view.php', ['id' => $occ->recording_cmid]),
-                    get_string('watch_recording', 'mod_msteamsecp')
-                )
-            );
-        }
+    // Inline recording player (skipped in replace mode where we render it separately).
+    if (!$suppress_recording && $occ->recording_ready && !empty($occ->recording_cmid)) {
+        $out .= msteamsecp_render_recording_player((int)$occ->recording_cmid, $occ->id, $context, $cm, $PAGE);
     } elseif ($occ->status === 'ended' && $instance->recording_mode === 'manual') {
-        // Manual upload — show upload form if instructor.
         if (has_capability('mod/msteamsecp:uploadrecording', $context)) {
-            $out .= html_writer::link(
+            $out .= ' ' . html_writer::link(
                 new moodle_url('/mod/msteamsecp/upload_recording.php',
                     ['occurrenceid' => $occ->id, 'cmid' => $context->instanceid]),
                 get_string('upload_recording', 'mod_msteamsecp'),
@@ -173,39 +243,64 @@ function msteamsecp_render_occurrence(
 
 function msteamsecp_occurrence_row(
     object $occ, object $instance, context_module $context,
-    int $now, int $userid, \moodle_database $DB, object $cm
+    int $now, int $join_window, int $userid, \moodle_database $DB, object $cm
 ): array {
-    global $OUTPUT;
+    global $PAGE;
 
-    $date   = userdate($occ->starttime, get_string('strftimedaydatetime', 'langconfig'));
-    $status = html_writer::span(
+    $date       = userdate($occ->starttime, get_string('strftimedaydatetime', 'langconfig'));
+    $status     = html_writer::span(
         get_string('status_' . $occ->status, 'mod_msteamsecp'),
         'badge badge-' . msteamsecp_status_badge($occ->status)
     );
+    $join_opens = $occ->starttime - $join_window;
 
+    // Join column.
     $join = '';
-    if ($occ->status === 'upcoming' && !empty($instance->join_url)) {
-        $join = html_writer::link(
-            new moodle_url($instance->join_url),
-            get_string('join', 'mod_msteamsecp'),
-            ['class' => 'btn btn-sm btn-primary', 'target' => '_blank']
-        );
-        $join .= ' ' . html_writer::link(
-            new moodle_url('/mod/msteamsecp/ical.php', [
-                'cmid'         => $cm->id,
-                'occurrenceid' => $occ->id,
-            ]),
+    if ($occ->endtime > $now && $occ->starttime <= $now) {
+        // Live.
+        if (!empty($instance->join_url)) {
+            $join = html_writer::link(
+                new moodle_url($instance->join_url),
+                get_string('join_now', 'mod_msteamsecp'),
+                ['class' => 'btn btn-sm btn-danger', 'target' => '_blank']
+            );
+            $join .= ' ';
+        }
+    } elseif ($occ->starttime > $now) {
+        if ($now >= $join_opens && !empty($instance->join_url)) {
+            $join = html_writer::link(
+                new moodle_url($instance->join_url),
+                get_string('join', 'mod_msteamsecp'),
+                ['class' => 'btn btn-sm btn-primary', 'target' => '_blank']
+            );
+            $join .= ' ';
+        }
+        $join .= html_writer::link(
+            new moodle_url('/mod/msteamsecp/ical.php', ['cmid' => $cm->id, 'occurrenceid' => $occ->id]),
             '📅',
-            ['class' => 'btn btn-sm btn-outline-secondary', 'title' => get_string('add_to_calendar', 'mod_msteamsecp')]
+            ['class' => 'btn btn-sm btn-outline-secondary',
+             'title' => get_string('add_to_calendar', 'mod_msteamsecp')]
         );
     }
 
+    // Recording column — inline collapsible player.
     $recording = '';
     if ($occ->recording_ready && !empty($occ->recording_cmid)) {
-        $recording = html_writer::link(
-            new moodle_url('/mod/resource/view.php', ['id' => $occ->recording_cmid]),
+        $toggle_id = 'msteamsecp-player-wrap-' . $occ->id;
+        $recording = html_writer::tag('button',
             get_string('watch', 'mod_msteamsecp'),
-            ['class' => 'btn btn-sm btn-outline-secondary']
+            [
+                'class'         => 'btn btn-sm btn-outline-secondary',
+                'type'          => 'button',
+                'data-toggle'   => 'collapse',
+                'data-target'   => '#' . $toggle_id,
+                'aria-expanded' => 'false',
+            ]
+        );
+        $recording .= html_writer::div(
+            msteamsecp_render_recording_player((int)$occ->recording_cmid, $occ->id, $context, $cm, $PAGE),
+            'collapse mt-2',
+            ['id' => $toggle_id]
         );
     } elseif ($occ->status === 'ended' && $instance->recording_mode === 'manual'
               && has_capability('mod/msteamsecp:uploadrecording', $context)) {
@@ -217,9 +312,9 @@ function msteamsecp_occurrence_row(
         );
     }
 
+    // Attendance column.
     $attendance_rec = $DB->get_record('msteamsecp_attendance',
         ['occurrenceid' => $occ->id, 'userid' => $userid]);
-
     $attendance = '';
     if ($attendance_rec) {
         $attendance = round($attendance_rec->attendance_pct, 1) . '%';
@@ -231,12 +326,54 @@ function msteamsecp_occurrence_row(
     return [$date, $status, $join, $recording, $attendance];
 }
 
+function msteamsecp_render_recording_player(
+    int $occid, int $real_occid, context_module $context, object $cm, \moodle_page $PAGE
+): string {
+    $fs    = get_file_storage();
+    $files = $fs->get_area_files(
+        $context->id, 'mod_msteamsecp', 'recording', $occid, 'filename', false
+    );
+    $file = reset($files);
+    if (!$file) {
+        return '';
+    }
+
+    $threshold = (int)(get_config('mod_msteamsecp', 'recording_completion_threshold') ?: 80);
+    $video_url = moodle_url::make_pluginfile_url(
+        $context->id, 'mod_msteamsecp', 'recording', $occid, '/', $file->get_filename()
+    );
+    $video_id  = 'msteamsecp-recording-' . $real_occid;
+
+    $out  = html_writer::tag('h4', get_string('session_recording', 'mod_msteamsecp'),
+        ['style' => 'margin-top:1rem;']);
+    $out .= html_writer::tag('video', '', [
+        'id'       => $video_id,
+        'src'      => $video_url->out(),
+        'controls' => 'controls',
+        'style'    => 'max-width:100%; width:100%; border-radius:6px;',
+        'preload'  => 'metadata',
+    ]);
+    $out .= html_writer::tag('p',
+        get_string('recording_threshold_notice', 'mod_msteamsecp', $threshold),
+        ['class' => 'text-muted small mt-1']
+    );
+    $out .= html_writer::div('', '',
+        ['id' => 'msteamsecp-completion-indicator-' . $real_occid, 'style' => 'display:none;']
+    );
+
+    $PAGE->requires->js_call_amd('mod_msteamsecp/recording_player', 'init', [
+        $video_id, $cm->id, $real_occid, $threshold,
+    ]);
+
+    return $out;
+}
+
 function msteamsecp_status_badge(string $status): string {
-    return match($status) {
+    $map = [
         'upcoming'  => 'primary',
         'live'      => 'danger',
         'ended'     => 'secondary',
         'cancelled' => 'warning',
-        default     => 'light',
-    };
+    ];
+    return $map[$status] ?? 'light';
 }

@@ -26,7 +26,8 @@
         <FIELD NAME="recurrence_end_date"       TYPE="int"    LENGTH="10" NOTNULL="false"/>
         <FIELD NAME="recurrence_count"          TYPE="int"    LENGTH="5"  NOTNULL="false"/>
         <FIELD NAME="recurrence_days_of_week"   TYPE="char"   LENGTH="20" NOTNULL="false"/>
-        <FIELD NAME="recording_behavior"        TYPE="char"   LENGTH="10" NOTNULL="true" DEFAULT="append"/>
+        <FIELD NAME="recording_behavior"        TYPE="char"   LENGTH="10" NOTNULL="true" DEFAULT="replace"/>
+        <FIELD NAME="attendance_requirement"    TYPE="char"   LENGTH="10" NOTNULL="true" DEFAULT="any"/>
         <FIELD NAME="recording_section_id"      TYPE="int"    LENGTH="10" NOTNULL="false"/>
         <FIELD NAME="starttime"                 TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="endtime"                   TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>

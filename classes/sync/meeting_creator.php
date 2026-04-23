@@ -63,7 +63,7 @@ class meeting_creator {
         global $DB;
 
         if (empty($instance->graph_meeting_id)) {
-            $course = $DB->get_record('course', ['id' => $instance->course], '*', MUST_EXIST);
+            $course = $DB->get_record('course', ['id' => $instance->course], '*', \MUST_EXIST);
             $this->create($instance, $course);
             return;
         }
@@ -80,12 +80,8 @@ class meeting_creator {
                 'recordAutomatically'   => (bool) $instance->auto_record,
             ]);
         } catch (\Throwable $e) {
-            debugging('msteamsecp: Graph meeting update failed: ' . $e->getMessage(), DEBUG_DEVELOPER);
+            debugging('msteamsecp: Graph meeting update failed: ' . $e->getMessage(), \DEBUG_DEVELOPER);
         }
-
-        // Note: Graph does not allow PATCH on calendar events that were created
-        // as Teams online meetings (returns 405 ErrorInvalidRequest).
-        // If the meeting time changes significantly, delete and recreate the activity.
 
         $this->sync_coorganisers($instance);
     }
@@ -102,7 +98,7 @@ class meeting_creator {
             try {
                 $this->graph->delete_meeting($instance->graph_meeting_id);
             } catch (\Throwable $e) {
-                debugging('msteamsecp: could not delete Graph meeting: ' . $e->getMessage(), DEBUG_DEVELOPER);
+                debugging('msteamsecp: could not delete Graph meeting: ' . $e->getMessage(), \DEBUG_DEVELOPER);
             }
         }
 
@@ -110,12 +106,11 @@ class meeting_creator {
             try {
                 $this->graph->delete_event($instance->graph_event_id);
             } catch (\Throwable $e) {
-                debugging('msteamsecp: could not delete Graph event: ' . $e->getMessage(), DEBUG_DEVELOPER);
+                debugging('msteamsecp: could not delete Graph event: ' . $e->getMessage(), \DEBUG_DEVELOPER);
             }
         }
 
-        // Remove learner calendar invites from the service account calendar.
-        // Graph will send cancellation notifications to each attendee automatically.
+        // Remove learner calendar events from each learner's own calendar.
         $enrollee_events = $DB->get_records('msteamsecp_enrollee_events', [
             'instanceid' => $instance->id,
             'removed'    => 0,
@@ -123,9 +118,12 @@ class meeting_creator {
         foreach ($enrollee_events as $ee) {
             if (!empty($ee->graph_event_id)) {
                 try {
-                    $this->graph->delete_event($ee->graph_event_id);
+                    $user = $DB->get_record('user', ['id' => $ee->userid]);
+                    if ($user && !empty($user->email)) {
+                        $this->graph->delete_user_event($user->email, $ee->graph_event_id);
+                    }
                 } catch (\Throwable $e) {
-                    debugging('msteamsecp: could not remove user calendar event: ' . $e->getMessage(), DEBUG_DEVELOPER);
+                    debugging('msteamsecp: could not remove user calendar event: ' . $e->getMessage(), \DEBUG_DEVELOPER);
                 }
             }
         }
@@ -170,7 +168,7 @@ class meeting_creator {
             $attendees = $this->build_coorganiser_attendees($coorganiser_emails);
             debugging('msteamsecp sync_coorganisers PATCH body: ' . json_encode([
                 'participants' => ['attendees' => $attendees],
-            ]), DEBUG_NORMAL);
+            ]), \DEBUG_NORMAL);
             $result = $this->graph->update_meeting($instance->graph_meeting_id, [
                 'participants' => ['attendees' => $attendees],
             ]);
@@ -179,9 +177,9 @@ class meeting_creator {
                     fn($a) => ['upn' => $a['upn'] ?? '?', 'role' => $a['role'] ?? '?'],
                     $result['participants']['attendees'] ?? []
                 )) . ' | lobby: ' . json_encode($result['lobbyBypassSettings'] ?? 'missing'),
-                DEBUG_NORMAL);
+                \DEBUG_NORMAL);
         } catch (\Throwable $e) {
-            debugging('msteamsecp: co-organiser meeting sync failed: ' . $e->getMessage(), DEBUG_NORMAL);
+            debugging('msteamsecp: co-organiser meeting sync failed: ' . $e->getMessage(), \DEBUG_NORMAL);
         }
 
         // 2. Sync attendees on the service account calendar event so co-organisers
@@ -195,7 +193,7 @@ class meeting_creator {
                     'body'      => $existing['body'] ?? [],
                 ]);
             } catch (\Throwable $e) {
-                debugging('msteamsecp: co-organiser calendar event sync failed: ' . $e->getMessage(), DEBUG_DEVELOPER);
+                debugging('msteamsecp: co-organiser calendar event sync failed: ' . $e->getMessage(), \DEBUG_DEVELOPER);
             }
         }
     }
@@ -233,7 +231,9 @@ class meeting_creator {
 
         $coorganiser_emails = $this->get_coorganiser_emails($instance->id);
 
-        $meeting_params = [
+        // Step 1: Create the Teams meeting via /me/onlineMeetings.
+        // This is the ONLY thing allowed to create a Teams meeting.
+        $meeting = $this->graph->create_meeting([
             'subject'               => $instance->name,
             'startDateTime'         => $this->to_iso8601($instance->starttime),
             'endDateTime'           => $this->to_iso8601($instance->endtime),
@@ -245,26 +245,21 @@ class meeting_creator {
             'participants'          => [
                 'attendees' => $this->build_coorganiser_attendees($coorganiser_emails),
             ],
-        ];
+        ]);
 
-        $meeting = $this->graph->create_meeting($meeting_params);
+        $join_url = $meeting['joinWebUrl'] ?? '';
 
-        // Create the service account calendar event.
-        // Co-organisers are added as required calendar attendees so they receive
-        // the Outlook invite. If co-organisers change later, sync_coorganisers()
-        // fetches the existing body first to preserve the Teams meeting blob,
-        // then PATCHes the updated attendee list.
-        // Learner invites are pushed individually by enrolment_handler.php —
-        // they are NOT added here to avoid spamming everyone at meeting creation.
+        // Step 2: Create a calendar event that REFERENCES the existing meeting.
+        // IMPORTANT: Do NOT set isOnlineMeeting or onlineMeetingProvider here.
+        // Setting those fields causes the Calendar API to create a brand new
+        // Teams meeting, generating a different meeting ID and ignoring the one
+        // we just created above. The join link lives only in the event body HTML.
         $event_params = [
-            'subject'               => $instance->name,
-            'body'                  => $this->build_event_body($course->fullname),
-            'start'                 => ['dateTime' => $this->to_iso8601($instance->starttime), 'timeZone' => 'UTC'],
-            'end'                   => ['dateTime' => $this->to_iso8601($instance->endtime),   'timeZone' => 'UTC'],
-            'isOnlineMeeting'       => true,
-            'onlineMeetingProvider' => 'teamsForBusiness',
-            'onlineMeetingUrl'      => $meeting['joinWebUrl'] ?? '',
-            'attendees'             => $this->build_calendar_attendees($coorganiser_emails),
+            'subject'   => $instance->name,
+            'body'      => $this->build_event_body($course->fullname, $join_url),
+            'start'     => ['dateTime' => $this->to_iso8601($instance->starttime), 'timeZone' => 'UTC'],
+            'end'       => ['dateTime' => $this->to_iso8601($instance->endtime),   'timeZone' => 'UTC'],
+            'attendees' => $this->build_calendar_attendees($coorganiser_emails),
         ];
 
         $event = $this->graph->create_event($event_params);
@@ -273,7 +268,7 @@ class meeting_creator {
             'id'               => $instance->id,
             'graph_meeting_id' => $meeting['id'],
             'graph_event_id'   => $event['id'],
-            'join_url'         => $meeting['joinWebUrl'] ?? '',
+            'join_url'         => $join_url,
             'timemodified'     => time(),
         ]);
 
@@ -312,16 +307,16 @@ class meeting_creator {
             ],
         ]);
 
+        $join_url = $meeting['joinWebUrl'] ?? '';
+
+        // Calendar event references the meeting via body only — no isOnlineMeeting.
         $event_params = [
-            'subject'               => $instance->name,
-            'body'                  => $this->build_event_body($course->fullname),
-            'start'                 => ['dateTime' => $this->to_iso8601($instance->starttime), 'timeZone' => 'UTC'],
-            'end'                   => ['dateTime' => $this->to_iso8601($instance->endtime),   'timeZone' => 'UTC'],
-            'recurrence'            => $this->build_recurrence_pattern($instance),
-            'isOnlineMeeting'       => true,
-            'onlineMeetingProvider' => 'teamsForBusiness',
-            'onlineMeetingUrl'      => $meeting['joinWebUrl'] ?? '',
-            'attendees'             => $this->build_calendar_attendees($coorganiser_emails),
+            'subject'   => $instance->name,
+            'body'      => $this->build_event_body($course->fullname, $join_url),
+            'start'     => ['dateTime' => $this->to_iso8601($instance->starttime), 'timeZone' => 'UTC'],
+            'end'       => ['dateTime' => $this->to_iso8601($instance->endtime),   'timeZone' => 'UTC'],
+            'recurrence'=> $this->build_recurrence_pattern($instance),
+            'attendees' => $this->build_calendar_attendees($coorganiser_emails),
         ];
 
         $event = $this->graph->create_event($event_params);
@@ -330,7 +325,7 @@ class meeting_creator {
             'id'               => $instance->id,
             'graph_meeting_id' => $meeting['id'],
             'graph_event_id'   => $event['id'],
-            'join_url'         => $meeting['joinWebUrl'] ?? '',
+            'join_url'         => $join_url,
             'timemodified'     => time(),
         ]);
 
@@ -367,7 +362,11 @@ class meeting_creator {
         $interval = max(1, (int) $instance->recurrence_interval);
         $count    = 0;
         $max      = $instance->recurrence_count ? (int) $instance->recurrence_count : 500;
-        $end_date = $instance->recurrence_end_date ?? PHP_INT_MAX;
+        // Extend end_date to end of the selected day (23:59:59) so that meetings
+        // scheduled on the end date are included regardless of their time-of-day.
+        $end_date = isset($instance->recurrence_end_date)
+            ? (int) $instance->recurrence_end_date + 86399
+            : \PHP_INT_MAX;
 
         $days_of_week = [];
         if ($instance->recurrence_type === 'weekly' && !empty($instance->recurrence_days_of_week)) {
@@ -464,7 +463,7 @@ class meeting_creator {
                     ];
                 }
             } catch (\Throwable $e) {
-                debugging('msteamsecp: could not resolve co-organiser ' . $email . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
+                debugging('msteamsecp: could not resolve co-organiser ' . $email . ': ' . $e->getMessage(), \DEBUG_DEVELOPER);
             }
         }
         return $attendees;
@@ -560,12 +559,21 @@ class meeting_creator {
      * @param string $description  Course name or other plain-text description
      * @return array               Graph body object {contentType, content}
      */
-    private function build_event_body(string $description = ''): array {
+    private function build_event_body(string $description = '', string $join_url = ''): array {
         $safe = $description ? htmlspecialchars(strip_tags($description), ENT_QUOTES, 'UTF-8') : '';
+        $url  = htmlspecialchars($join_url, ENT_QUOTES, 'UTF-8');
         $content = '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head>'
             . '<body style="font-family:\'Segoe UI\',\'Segoe WP\',sans-serif; font-size:14px; color:#242424;">';
         if ($safe !== '') {
             $content .= '<p style="margin:0 0 16px 0;">' . $safe . '</p>';
+        }
+        if ($url) {
+            $content .= '<p style="margin:0 0 8px 0;">'
+                . '<a href="' . $url . '" style="color:#6264a7; font-weight:bold;">Join Microsoft Teams Meeting</a>'
+                . '</p>'
+                . '<p style="margin:0; font-size:12px; color:#666;">'
+                . '<a href="' . $url . '" style="color:#666;">' . $url . '</a>'
+                . '</p>';
         }
         $content .= '</body></html>';
         return ['contentType' => 'HTML', 'content' => $content];

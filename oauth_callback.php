@@ -21,8 +21,8 @@ require_login();
 require_capability('moodle/site:config', context_system::instance());
 
 $tenant_id     = get_config('mod_msteamsecp', 'tenant_id');
-$client_id     = get_config('mod_msteamsecp', 'client_id');
-$client_secret = get_config('mod_msteamsecp', 'client_secret');
+$client_id     = (string) get_config('mod_msteamsecp', 'client_id');
+$client_secret = (string) get_config('mod_msteamsecp', 'client_secret');
 $redirect_uri  = (new moodle_url('/mod/msteamsecp/oauth_callback.php'))->out(false);
 
 // ── Error from Microsoft ──────────────────────────────────────────────────────

@@ -57,8 +57,8 @@ class graph {
 
     public function __construct() {
         $this->tenant_id           = get_config('mod_msteamsecp', 'tenant_id');
-        $this->client_id           = get_config('mod_msteamsecp', 'client_id');
-        $this->client_secret       = get_config('mod_msteamsecp', 'client_secret');
+        $this->client_id           = (string) get_config('mod_msteamsecp', 'client_id');
+        $this->client_secret       = (string) get_config('mod_msteamsecp', 'client_secret');
         $this->service_account_upn = get_config('mod_msteamsecp', 'service_account_upn');
 
         if (empty($this->tenant_id) || empty($this->client_id) || empty($this->client_secret)) {
@@ -105,7 +105,7 @@ class graph {
                 '/users/' . urlencode($email) . '?$select=id,mail,displayName,userPrincipalName'
             );
         } catch (\Throwable $e) {
-            debugging('msteamsecp: could not look up user ' . $email . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
+            debugging('msteamsecp: could not look up user ' . $email . ': ' . $e->getMessage(), \DEBUG_DEVELOPER);
             return [];
         }
     }
@@ -127,16 +127,16 @@ class graph {
      */
     public function create_meeting(array $params): array {
         if ($this->has_delegated_token()) {
-            debugging('msteamsecp: create_meeting using DELEGATED token via /me/onlineMeetings', DEBUG_NORMAL);
+            debugging('msteamsecp: create_meeting using DELEGATED token via /me/onlineMeetings', \DEBUG_NORMAL);
             $result = $this->request('POST', '/me/onlineMeetings', $params, true);
             debugging('msteamsecp: create_meeting response — meetingType: '
                 . json_encode($result['meetingType'] ?? 'missing')
                 . ' | lobby: ' . json_encode($result['lobbyBypassSettings'] ?? 'missing')
                 . ' | attendees: ' . json_encode(array_column($result['participants']['attendees'] ?? [], 'role')),
-                DEBUG_NORMAL);
+                \DEBUG_NORMAL);
             return $result;
         }
-        debugging('msteamsecp: create_meeting using APP-ONLY token via /users/{id}/onlineMeetings — delegated token not configured', DEBUG_NORMAL);
+        debugging('msteamsecp: create_meeting using APP-ONLY token via /users/{id}/onlineMeetings — delegated token not configured', \DEBUG_NORMAL);
         return $this->request(
             'POST',
             '/users/' . urlencode($this->get_service_account_id()) . '/onlineMeetings',
@@ -208,11 +208,17 @@ class graph {
         if (!empty($options['sendUpdates'])) {
             $query = '?sendUpdates=' . urlencode($options['sendUpdates']);
         }
-        return $this->request(
+        $result = $this->request(
             'POST',
             '/users/' . urlencode($this->get_service_account_id()) . '/events' . $query,
             $params
         );
+        debugging('msteamsecp create_event response — isOnlineMeeting: '
+            . json_encode($result['isOnlineMeeting'] ?? 'missing')
+            . ' | joinUrl: ' . json_encode($result['onlineMeeting']['joinUrl'] ?? $result['onlineMeetingUrl'] ?? 'missing')
+            . ' | meetingId: ' . json_encode($result['onlineMeeting']['id'] ?? 'missing'),
+            \DEBUG_NORMAL);
+        return $result;
     }
 
     /**
@@ -245,6 +251,36 @@ class graph {
     // -------------------------------------------------------------------------
     // Calendar events — user mailboxes (enrollee calendar push)
     // -------------------------------------------------------------------------
+
+    /**
+     * Create a calendar event directly on a specific user's Outlook calendar.
+     * Used for learner invites — avoids the service account calendar creating
+     * a new Teams meeting automatically due to its default meeting provider.
+     *
+     * @param string $user_email  Learner's M365 email / UPN
+     * @param array  $params      Event parameters
+     * @return array              Graph event object including id
+     */
+    public function create_user_event(string $user_email, array $params): array {
+        return $this->request(
+            'POST',
+            '/users/' . urlencode($user_email) . '/events',
+            $params
+        );
+    }
+
+    /**
+     * Delete a calendar event from a specific user's Outlook calendar.
+     *
+     * @param string $user_email
+     * @param string $event_id
+     */
+    public function delete_user_event(string $user_email, string $event_id): void {
+        $this->request(
+            'DELETE',
+            '/users/' . urlencode($user_email) . '/events/' . urlencode($event_id)
+        );
+    }
 
     // -------------------------------------------------------------------------
     // Attendance reports
@@ -310,19 +346,48 @@ class graph {
      * @param string $content_url  Recording content URL from Graph
      * @return string              Raw file binary
      */
-    public function download_recording(string $content_url): string {
-        $curl = new \curl(['ignoresecurity' => true]);
-        $curl->setopt(['CURLOPT_RETURNTRANSFER' => true, 'CURLOPT_TIMEOUT' => 300]);
-        $curl->setHeader(['Authorization: Bearer ' . $this->get_token()]);
+    /**
+     * Download a recording file from its content URL and write it to disk.
+     * Streams directly to a temp file to avoid loading large video into memory.
+     *
+     * @param string $content_url  Recording content URL from Graph
+     * @param string $dest_path    Local file path to write to
+     * @throws \moodle_exception   On HTTP error or write failure
+     */
+    public function download_recording_to_file(string $content_url, string $dest_path): void {
+        $token = $this->get_token();
 
-        $raw  = $curl->get($content_url);
-        $code = $curl->get_info()['http_code'] ?? 0;
-
-        if ($code < 200 || $code >= 300) {
-            throw new \moodle_exception('error_recording_download', 'mod_msteamsecp', '', $code);
+        $fp = fopen($dest_path, 'wb');
+        if (!$fp) {
+            throw new \moodle_exception('error_recording_download', 'mod_msteamsecp', '',
+                'Could not open temp file for writing: ' . $dest_path);
         }
 
-        return $raw;
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $content_url,
+            CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_FILE           => $fp,
+            CURLOPT_TIMEOUT        => 600, // 10 min for large recordings.
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . $token],
+        ]);
+
+        curl_exec($ch);
+        $code  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+        fclose($fp);
+
+        if (!empty($error)) {
+            throw new \moodle_exception('error_recording_download', 'mod_msteamsecp', '',
+                'curl error: ' . $error);
+        }
+
+        if ($code < 200 || $code >= 300) {
+            throw new \moodle_exception('error_recording_download', 'mod_msteamsecp', '',
+                'HTTP ' . $code);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -396,7 +461,7 @@ class graph {
         if (!$has_token) {
             return [
                 'state'         => 'missing',
-                'message'       => 'Service account not authorized. Meetings will use app-only token — facilitators may not have full co-organiser permissions.',
+                'message'       => 'Service account not authorized. Meetings will use app-only token — co-organisers may not have full permissions.',
                 'reconnect_url' => $reconnect_url,
                 'age_days'      => null,
             ];

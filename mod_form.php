@@ -62,7 +62,7 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
             'auto'   => get_string('recording_mode_auto',   'mod_msteamsecp'),
         ]);
         $mform->setDefault('recording_mode', get_config('mod_msteamsecp', 'default_recording_mode') ?: 'manual');
-        $mform->disabledIf('recording_mode', 'auto_record');
+        $mform->hideIf('recording_mode', 'auto_record', 'eq', 0);
 
         // ── Recurrence ─────────────────────────────────────────────────────
         $mform->addElement('header', 'recurrence_header', get_string('recurrence', 'mod_msteamsecp'));
@@ -74,12 +74,12 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
             'weekly'  => get_string('recurrence_weekly',  'mod_msteamsecp'),
             'monthly' => get_string('recurrence_monthly', 'mod_msteamsecp'),
         ]);
-        $mform->hideIf('recurrence_type', 'is_recurring');
+        $mform->hideIf('recurrence_type', 'is_recurring', 'eq', 0);
 
         $mform->addElement('text', 'recurrence_interval', get_string('recurrence_interval', 'mod_msteamsecp'), ['size' => 5]);
         $mform->setType('recurrence_interval', PARAM_INT);
         $mform->setDefault('recurrence_interval', 1);
-        $mform->hideIf('recurrence_interval', 'is_recurring');
+        $mform->hideIf('recurrence_interval', 'is_recurring', 'eq', 0);
 
         // Days of week (weekly only).
         $days = [
@@ -96,7 +96,7 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
             $day_checkboxes[] = $mform->createElement('advcheckbox', 'dow_' . $num, '', $label, ['group' => 1]);
         }
         $mform->addGroup($day_checkboxes, 'days_of_week_group', get_string('recurrence_days', 'mod_msteamsecp'), ' ', false);
-        $mform->hideIf('days_of_week_group', 'is_recurring');
+        $mform->hideIf('days_of_week_group', 'is_recurring', 'eq', 0);
         $mform->hideIf('days_of_week_group', 'recurrence_type', 'neq', 'weekly');
 
         // End condition.
@@ -104,23 +104,37 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
             'date'  => get_string('recurrence_end_date',  'mod_msteamsecp'),
             'count' => get_string('recurrence_end_count', 'mod_msteamsecp'),
         ]);
-        $mform->hideIf('recurrence_end_type', 'is_recurring');
+        $mform->hideIf('recurrence_end_type', 'is_recurring', 'eq', 0);
 
         $mform->addElement('date_selector', 'recurrence_end_date', get_string('recurrence_end_date', 'mod_msteamsecp'));
-        $mform->hideIf('recurrence_end_date', 'is_recurring');
+        $mform->hideIf('recurrence_end_date', 'is_recurring', 'eq', 0);
         $mform->hideIf('recurrence_end_date', 'recurrence_end_type', 'neq', 'date');
 
         $mform->addElement('text', 'recurrence_count', get_string('recurrence_count', 'mod_msteamsecp'), ['size' => 5]);
         $mform->setType('recurrence_count', PARAM_INT);
         $mform->setDefault('recurrence_count', 4);
-        $mform->hideIf('recurrence_count', 'is_recurring');
+        $mform->hideIf('recurrence_count', 'is_recurring', 'eq', 0);
         $mform->hideIf('recurrence_count', 'recurrence_end_type', 'neq', 'count');
 
-        $mform->addElement('select', 'recording_behavior', get_string('recording_behavior', 'mod_msteamsecp'), [
-            'append'  => get_string('recording_behavior_append',  'mod_msteamsecp'),
-            'replace' => get_string('recording_behavior_replace', 'mod_msteamsecp'),
-        ]);
-        $mform->hideIf('recording_behavior', 'is_recurring');
+        // ── Attendance requirement (recurring only) ────────────────────────
+        // Controls both how calendar invites are sent and how recordings accumulate.
+        // 'any'  → attend once or watch one recording → course complete
+        //          Calendar: rolling push (next occurrence only), recording: replace
+        // 'all'  → must attend every occurrence or watch each recording
+        //          Calendar: all upcoming occurrences pushed on enrol, recording: append
+        $mform->addElement('select', 'attendance_requirement',
+            get_string('attendance_requirement', 'mod_msteamsecp'), [
+                'any' => get_string('attendance_requirement_any', 'mod_msteamsecp'),
+                'all' => get_string('attendance_requirement_all', 'mod_msteamsecp'),
+            ]
+        );
+        $mform->setDefault('attendance_requirement', 'any');
+        $mform->addHelpButton('attendance_requirement', 'attendance_requirement', 'mod_msteamsecp');
+        $mform->hideIf('attendance_requirement', 'is_recurring', 'eq', 0);
+
+        // recording_behavior is now derived from attendance_requirement — hidden from UI.
+        $mform->addElement('hidden', 'recording_behavior', 'replace');
+        $mform->setType('recording_behavior', PARAM_ALPHA);
 
         // ── Co-organisers ──────────────────────────────────────────────────────
         $mform->addElement('header', 'coorganisers_header', get_string('coorganisers', 'mod_msteamsecp'));
@@ -134,7 +148,7 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
             'deleted = 0 AND suspended = 0 AND id > 1',
             [],
             'lastname ASC, firstname ASC',
-            'id, firstname, lastname, email'
+            'id, firstname, lastname, firstnamephonetic, lastnamephonetic, middlename, alternatename, email'
         );
         $user_options = [];
         foreach ($users as $u) {
@@ -154,27 +168,64 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
         );
         $mform->addHelpButton('coorganiser_userids', 'coorganisers', 'mod_msteamsecp');
 
-        // ── Completion ─────────────────────────────────────────────────────
-        $mform->addElement('header', 'completion_header', get_string('completion_settings', 'mod_msteamsecp'));
-
-        $mform->addElement('advcheckbox', 'completion_attendance',
-            get_string('completion_attendance', 'mod_msteamsecp'));
-
-        $mform->addElement('text', 'completion_attendance_pct',
-            get_string('completion_attendance_pct', 'mod_msteamsecp'), ['size' => 5]);
-        $mform->setType('completion_attendance_pct', PARAM_INT);
-        $mform->setDefault('completion_attendance_pct',
-            (int) get_config('mod_msteamsecp', 'default_attendance_pct'));
-        $mform->addHelpButton('completion_attendance_pct', 'completion_attendance_pct', 'mod_msteamsecp');
-        $mform->hideIf('completion_attendance_pct', 'completion_attendance');
-
-        $mform->addElement('advcheckbox', 'completion_recording',
-            get_string('completion_recording', 'mod_msteamsecp'));
-        $mform->addHelpButton('completion_recording', 'completion_recording', 'mod_msteamsecp');
-
-        // Standard Moodle completion fields.
+        // Standard Moodle completion fields — our custom rules are added via
+        // add_completion_rules() below, which Moodle calls from within this.
         $this->standard_coursemodule_elements();
         $this->add_action_buttons();
+    }
+
+    /**
+     * Return the form suffix — get_suffix() was added in Moodle 4.3.
+     * On 4.2 and earlier there is no suffix so we return an empty string.
+     */
+    private function msteamsecp_suffix(): string {
+        return method_exists($this, 'get_suffix') ? $this->get_suffix() : '';
+    }
+
+    /**
+     * Add custom completion rule controls.
+     *
+     * @return array Names of added elements.
+     */
+    public function add_completion_rules(): array {
+        $mform = $this->_form;
+
+        // Attendance rule — two separate elements, no group.
+        $mform->addElement('advcheckbox', 'completion_attendance', '',
+            get_string('completion_attendance', 'mod_msteamsecp'));
+        $mform->addHelpButton('completion_attendance',
+            'completion_attendance', 'mod_msteamsecp');
+
+        $mform->addElement('text', 'completion_attendance_pct',
+            get_string('completion_attendance_pct', 'mod_msteamsecp'), ['size' => 4]);
+        $mform->setType('completion_attendance_pct', PARAM_INT);
+        $mform->setDefault('completion_attendance_pct',
+            (int) get_config('mod_msteamsecp', 'default_attendance_pct') ?: 75);
+        $mform->addHelpButton('completion_attendance_pct',
+            'completion_attendance_pct', 'mod_msteamsecp');
+        $mform->hideIf('completion_attendance_pct', 'completion_attendance', 'eq', 0);
+
+        // Recording watch rule.
+        $mform->addElement('advcheckbox', 'completion_recording', '',
+            get_string('completion_recording', 'mod_msteamsecp'));
+        $mform->addHelpButton('completion_recording',
+            'completion_recording', 'mod_msteamsecp');
+
+        return [
+            'completion_attendance',
+            'completion_recording',
+        ];
+    }
+
+    /**
+     * Called during validation — returns true if at least one custom rule is enabled.
+     *
+     * @param array $data
+     * @return bool
+     */
+    public function completion_rule_enabled($data): bool {
+        return !empty($data['completion_attendance'])
+            || !empty($data['completion_recording']);
     }
 
     public function validation($data, $files) {
@@ -209,12 +260,54 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
      * into individual checkbox fields.
      */
     public function set_data($data) {
+        global $DB;
+
         if (!empty($data->recurrence_days_of_week)) {
             $days = json_decode($data->recurrence_days_of_week, true) ?? [];
             foreach ($days as $d) {
                 $data->{'dow_' . $d} = 1;
             }
         }
+
+        // Populate attendance_requirement from recording_behavior for instances
+        // saved before this field existed (backward compat on edit).
+        if (empty($data->attendance_requirement) && !empty($data->recording_behavior)) {
+            $data->attendance_requirement = ($data->recording_behavior === 'append') ? 'all' : 'any';
+        }
+
+        // Re-populate co-organiser selections from the DB so the autocomplete
+        // field shows existing choices when editing an activity.
+        if (!empty($data->instance)) {
+            $coorganiser_ids = $DB->get_fieldset_select(
+                'msteamsecp_coorganisers',
+                'userid',
+                'instanceid = :instanceid',
+                ['instanceid' => $data->instance]
+            );
+            if (!empty($coorganiser_ids)) {
+                $data->coorganiser_userids = $coorganiser_ids;
+            }
+        }
+
         parent::set_data($data);
+    }
+
+    /**
+     * Zero out custom completion rules if automatic completion is not selected.
+     */
+    public function get_data() {
+        $data = parent::get_data();
+        if (!$data) {
+            return $data;
+        }
+
+        // If completion is not set to automatic, clear our custom rule values.
+        if (empty($data->completion) || $data->completion != COMPLETION_TRACKING_AUTOMATIC) {
+            $data->completion_attendance     = 0;
+            $data->completion_attendance_pct = 0;
+            $data->completion_recording      = 0;
+        }
+
+        return $data;
     }
 }

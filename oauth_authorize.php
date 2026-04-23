@@ -17,7 +17,7 @@ require_login();
 require_capability('moodle/site:config', context_system::instance());
 
 $tenant_id    = get_config('mod_msteamsecp', 'tenant_id');
-$client_id    = get_config('mod_msteamsecp', 'client_id');
+$client_id    = (string) get_config('mod_msteamsecp', 'client_id');
 $redirect_uri = (new moodle_url('/mod/msteamsecp/oauth_callback.php'))->out(false);
 
 if (empty($tenant_id) || empty($client_id)) {

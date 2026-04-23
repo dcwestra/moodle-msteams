@@ -9,10 +9,13 @@
 defined('MOODLE_INTERNAL') || die();
 
 // Plugin.
-$string['pluginname']          = 'Teams Meeting (ECP)';
-$string['modulename']          = 'Teams Meeting';
-$string['modulenameplural']    = 'Teams Meetings';
+$string['pluginname']          = 'ECP Teams Meeting';
+$string['modulename']          = 'ECP Teams Meeting';
+$string['modulenameplural']    = 'ECP Teams Meetings';
 $string['pluginadministration'] = 'Teams Meeting (ECP) Administration';
+
+// Calendar event type.
+$string['meeting'] = 'Teams Meeting';
 
 // Form.
 $string['meetingname']          = 'Meeting title';
@@ -21,7 +24,7 @@ $string['starttime']            = 'Start time';
 $string['endtime']              = 'End time';
 $string['meeting_settings']     = 'Meeting settings';
 $string['lobby_bypass']         = 'Who can bypass the lobby';
-$string['lobby_bypass_help']    = 'Controls which participants join the meeting directly without waiting in the lobby. The default "Organizers and co-organizers" means facilitators (who are assigned the co-organiser role) bypass the lobby, while learners wait to be admitted.';
+$string['lobby_bypass_help']    = 'Controls which participants join the meeting directly without waiting in the lobby. The default "Organizers and co-organizers" means co-organisers bypass the lobby, while learners wait to be admitted.';
 $string['lobby_bypass_coorganizers']               = 'Organizers and co-organizers';
 $string['lobby_bypass_organization']               = 'People in my organization and guests';
 $string['lobby_bypass_organization_no_guests']     = 'People in my organization (excluding guests)';
@@ -54,6 +57,7 @@ $string['recording_behavior_replace'] = 'Replace with latest recording';
 // Completion.
 $string['completion_settings']       = 'Completion';
 $string['completion_attendance']     = 'Mark complete when user attends live';
+$string['completion_attendance_help'] = 'When enabled, attending a live session grants course completion credit once the minimum attendance percentage is reached.';
 $string['completion_attendance_pct'] = 'Minimum attendance % required (0 = any join)';
 $string['completion_attendance_pct_help'] = 'Set to 0 to grant credit for joining at any point. Set to e.g. 75 to require the user attend at least 75% of the meeting duration.';
 $string['completion_recording']      = 'Allow recording watch to grant completion credit';
@@ -99,11 +103,11 @@ $string['settings_client_secret_desc']     = 'Azure app registration client secr
 $string['settings_service_account_upn']    = 'Service account UPN';
 $string['settings_service_account_upn_desc'] = 'UPN of the shared account used to create all meetings e.g. mapleLMS@yourcompany.com';
 $string['settings_roles_heading']          = 'Role mapping';
-$string['settings_coorganiser_roles']      = 'Facilitator roles';
-$string['settings_coorganiser_roles_desc'] = 'Comma-separated list of Moodle role shortnames whose holders are eligible to be selected as facilitators. Default: editingteacher,teacher,manager';
+$string['settings_coorganiser_roles']      = 'Co-organiser roles';
+$string['settings_coorganiser_roles_desc'] = 'Comma-separated list of Moodle role shortnames whose holders are eligible to be selected as co-organisers. Default: editingteacher,teacher,manager';
 $string['settings_defaults_heading']       = 'Defaults for new meetings';
 $string['settings_default_lobby_bypass']      = 'Default lobby bypass';
-$string['settings_default_lobby_bypass_desc'] = 'Default "Who can bypass the lobby" setting for new meetings. "Organizers and co-organizers" is recommended — facilitators are assigned the co-organiser role and bypass the lobby automatically.';
+$string['settings_default_lobby_bypass_desc'] = 'Default "Who can bypass the lobby" setting for new meetings. "Organizers and co-organizers" is recommended — co-organisers bypass the lobby automatically.';
 $string['settings_default_auto_record']    = 'Auto-record by default';
 $string['settings_default_auto_record_desc'] = 'New meetings will record automatically unless changed per meeting.';
 $string['settings_default_recording_mode'] = 'Default recording mode';
@@ -122,7 +126,7 @@ $string['error_graph_method']         = 'Unsupported HTTP method: {$a}';
 $string['error_recording_download']   = 'Recording download failed (HTTP {$a}).';
 $string['error_endtime_before_start'] = 'End time must be after start time.';
 $string['error_recurrence_count']     = 'Please enter a valid number of occurrences (minimum 1).';
-$string['error_coorganiser_required'] = 'At least one facilitator must be selected. Without a facilitator, learners will be held in the lobby with no one to admit them.';
+$string['error_coorganiser_required'] = 'At least one co-organiser must be selected. Without a co-organiser, learners will be held in the lobby with no one to admit them.';
 
 // Task.
 $string['task_process_events'] = 'Teams Meeting ECP — Post-event processor (attendance & recordings)';
@@ -147,21 +151,21 @@ $string['privacy:metadata:graph:calendar']                = 'Meeting calendar ev
 $string['privacy:export:attendance']                      = 'Attendance Records';
 $string['privacy:export:calendar_events']                 = 'Calendar Events';
 
-// Facilitators.
-$string['coorganisers']      = 'Facilitators';
-$string['coorganisers_help'] = 'Select at least one facilitator for this meeting. Facilitators receive a calendar invite and can bypass the lobby, start the meeting, admit participants, manage recording, and control the session. Without a facilitator, learners will be held in the lobby with no one to admit them.';
-$string['coorganisers_none'] = 'No facilitators selected';
+// Co-organisers.
+$string['coorganisers']      = 'Co-organisers';
+$string['coorganisers_help'] = 'Select at least one co-organiser for this meeting. Co-organisers receive a calendar invite and can bypass the lobby, start the meeting, admit participants, manage recording, and control the session. Without a co-organiser, learners will be held in the lobby with no one to admit them.';
+$string['coorganisers_none'] = 'No co-organisers selected';
 
 $string['add_to_calendar'] = 'Add to calendar (.ics)';
 
 // OAuth / delegated auth.
 $string['settings_oauth_heading']            = 'Service account authorization';
-$string['settings_oauth_heading_desc']       = 'The plugin uses a delegated (user) token for meeting creation so Teams treats meetings as user-created, giving facilitators full co-organizer permissions immediately. Authorize once — the plugin refreshes the token automatically.';
+$string['settings_oauth_heading_desc']       = 'The plugin uses a delegated (user) token for meeting creation so Teams treats meetings as user-created, giving co-organisers full permissions immediately. Authorize once — the plugin refreshes the token automatically.';
 $string['settings_oauth_status']             = 'Connection status';
 $string['oauth_status_connected']            = 'Service account connected';
 $string['oauth_status_active']               = 'Active';
 $string['oauth_status_not_connected']        = 'Not connected';
-$string['oauth_status_not_connected_desc']   = 'Meeting creation will fall back to app-only token until the service account is authorized. Facilitators may not have full co-organizer permissions.';
+$string['oauth_status_not_connected_desc']   = 'Meeting creation will fall back to app-only token until the service account is authorized. Co-organisers may not have full permissions.';
 $string['oauth_access_expires']              = 'Access token expires: {$a}';
 $string['oauth_authorize_btn']               = 'Authorize service account';
 $string['oauth_reauthorize']                 = 'Re-authorize service account';
@@ -170,6 +174,37 @@ $string['oauth_error']                       = 'Microsoft returned an error duri
 $string['oauth_token_error']                 = 'Failed to exchange authorization code for tokens: {$a}';
 $string['oauth_state_mismatch']              = 'Authorization state mismatch — possible CSRF attempt. Please try again.';
 $string['oauth_not_configured']              = 'Please save your Tenant ID and Client ID before authorizing.';
-$string['oauth_token_expired_notice']  = 'The service account authorization has expired. The meeting was created with reduced facilitator permissions. Please re-authorize to restore full co-organiser access.';
-$string['oauth_token_missing_notice']  = 'The service account has not been authorized. The meeting was created with reduced facilitator permissions. Please authorize the service account to enable full co-organiser access.';
-$string['oauth_token_failed_notice']   = 'Service account re-authorization required. The meeting was created with reduced facilitator permissions.';
+$string['oauth_token_expired_notice']  = 'The service account authorization has expired. The meeting was created with reduced co-organiser permissions. Please re-authorize to restore full access.';
+$string['oauth_token_missing_notice']  = 'The service account has not been authorized. The meeting was created with reduced co-organiser permissions. Please authorize the service account to enable full access.';
+$string['oauth_token_failed_notice']   = 'Service account re-authorization required. The meeting was created with reduced co-organiser permissions.';
+
+// Capability strings — required for each entry in db/access.php.
+$string['msteamsecp:view']            = 'View Teams meeting activity';
+$string['msteamsecp:addinstance']     = 'Add a Teams meeting activity';
+$string['msteamsecp:uploadrecording'] = 'Upload meeting recordings to course';
+$string['msteamsecp:viewattendance']  = 'View meeting attendance reports';
+
+// Recording player strings.
+$string['session_recording']                      = 'Session Recording';
+$string['recording_threshold_notice']             = 'You must watch at least {$a}% of this recording to receive course completion credit.';
+$string['recording_completion_granted']           = '✅ Completion credited — thank you for watching the recording.';
+$string['settings_recording_completion_threshold']      = 'Recording completion threshold (%)';
+$string['settings_recording_completion_threshold_desc'] = 'Percentage of the recording a learner must watch to receive course completion credit. Default is 80.';
+$string['next_session']       = 'Next Session';
+$string['all_sessions_ended'] = 'All sessions have ended.';
+$string['join_opens_in']      = 'Join link opens in {$a}';
+
+// Attendance requirement.
+$string['attendance_requirement']      = 'Attendance requirement';
+$string['attendance_requirement_any']  = 'Attend at least one session';
+$string['attendance_requirement_all']  = 'Attend all sessions';
+$string['attendance_requirement_help'] = 'Controls what learners must do to complete this activity.
+
+**Attend at least one session** — learners earn completion by attending any single session or watching its recording. Calendar invites advance one session at a time. Recordings replace each other (only the latest is shown).
+
+**Attend all sessions** — learners must attend every session in the series, or watch each session\'s recording. All upcoming session invites are sent at enrolment. Each session recording is kept and available individually.';
+
+// Completion rule descriptions (shown in course page completion status).
+$string['completion_attendance_desc']     = 'Attend a session';
+$string['completion_attendance_pct_desc'] = 'Attend at least {$a}% of a session';
+$string['completion_recording_desc']      = 'Watch the session recording';
