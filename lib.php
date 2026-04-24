@@ -258,6 +258,35 @@ function msteamsecp_course_completed(\core\event\course_completed $event): void 
     }
 }
 
+/**
+ * Called when a user's activity completion state is updated.
+ * Removes future Outlook/Teams calendar invites when a learner earns activity
+ * completion credit — even if the course itself has not completed yet.
+ * This ensures "attend once" mode learners stop receiving further session
+ * invites immediately upon earning credit, regardless of course completion state.
+ */
+function msteamsecp_module_completion_updated(\core\event\course_module_completion_updated $event): void {
+    try {
+        $data = $event->get_record_snapshot('course_modules_completion', $event->objectid);
+
+        // Only act when completion is actually granted, not when it's reset.
+        if (empty($data) || (int) $data->completionstate < 1) {
+            return;
+        }
+
+        // Only act on our own module type.
+        $cm = get_coursemodule_from_id('msteamsecp', $event->contextinstanceid);
+        if (!$cm) {
+            return;
+        }
+
+        $handler = new \mod_msteamsecp\sync\enrolment_handler();
+        $handler->on_activity_complete($event->relateduserid, $event->courseid, (int) $cm->instance);
+    } catch (\Throwable $e) {
+        debugging('msteamsecp: module completion handler failed: ' . $e->getMessage(), DEBUG_DEVELOPER);
+    }
+}
+
 // ── View tracking ─────────────────────────────────────────────────────────────
 
 function msteamsecp_view(stdClass $instance, stdClass $course, stdClass $cm, context_module $context): void {
@@ -353,7 +382,7 @@ function msteamsecp_supports(string $feature): ?bool {
         case FEATURE_COMPLETION_TRACKS_VIEWS: return false;
         case FEATURE_COMPLETION_HAS_RULES:    return true;
         case FEATURE_GRADE_HAS_GRADE:         return false;
-        case FEATURE_BACKUP_MOODLE2:          return false;
+        case FEATURE_BACKUP_MOODLE2:          return true;
         case FEATURE_SHOW_DESCRIPTION:        return true;
         // MOD_PURPOSE_COMMUNICATION added in 4.4 — guard for 4.2 compatibility.
         case FEATURE_MOD_PURPOSE:

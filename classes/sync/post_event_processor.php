@@ -260,7 +260,10 @@ class post_event_processor {
         global $DB;
 
         // Find all users enrolled in this course who do not yet have
-        // completion credit on this meeting activity.
+        // completion credit — check BOTH the plugin's own attendance table
+        // AND Moodle's standard completion state so that manually granted
+        // completion credit (e.g. for users sharing a computer) also stops
+        // further invites being sent.
         $sql = "SELECT u.id, u.email, u.firstname, u.lastname
                   FROM {user_enrolments} ue
                   JOIN {enrol} e ON e.id = ue.enrolid AND e.courseid = :courseid
@@ -272,11 +275,25 @@ class post_event_processor {
                         WHERE att.instanceid = :instanceid
                           AND att.userid = u.id
                           AND att.credit_granted = 1
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM {course_modules_completion} cmc
+                        WHERE cmc.coursemoduleid = :cmid
+                          AND cmc.userid = u.id
+                          AND cmc.completionstate >= 1
                    )";
+
+        // Resolve the course module ID for the completion check.
+        $cmid = $DB->get_field('course_modules', 'id', [
+            'instance' => $occ->instanceid,
+            'module'   => $DB->get_field('modules', 'id', ['name' => 'msteamsecp']),
+        ]);
 
         $users = $DB->get_records_sql($sql, [
             'courseid'   => $occ->course,
             'instanceid' => $occ->instanceid,
+            'cmid'       => (int) $cmid,
         ]);
 
         if (empty($users)) {

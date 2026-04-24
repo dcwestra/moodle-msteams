@@ -4,7 +4,7 @@
 *Copyright (C) 2026 Eyecare Partners. All rights reserved.*  
 *Licensed under GNU GPL v3. For internal use only.*
 
-A ground-up Microsoft Teams meeting activity for Moodle/MapleLMS, built specifically for Eyecare Partners. Replaces the community `mod_msteams` plugin with a native Graph API integration, full lifecycle automation, and a significantly more capable feature set.
+A ground-up Microsoft Teams meeting activity for Moodle, built specifically for Eyecare Partners. Replaces the community `mod_msteams` plugin with a native Graph API integration, full lifecycle automation, and a significantly more capable feature set.
 
 ---
 
@@ -12,7 +12,7 @@ A ground-up Microsoft Teams meeting activity for Moodle/MapleLMS, built specific
 
 The community `mod_msteams` plugin routes meeting creation through an external iframe hosted by Enovation (an Irish company), introducing verified reliability and compliance risks — multiple documented outages, third-party exposure of Microsoft credentials, and no Data Processing Agreement.
 
-`mod_msteamsecp` eliminates all of these. All communication is directly between your MapleLMS server and Microsoft's Graph API over HTTPS. No third-party service is involved at any point. Your Azure credentials never leave your infrastructure.
+`mod_msteamsecp` eliminates all of these. All communication is directly between your Moodle server and Microsoft's Graph API over HTTPS. No third-party service is involved at any point. Your Azure credentials never leave your infrastructure.
 
 Credentials (Client ID and Client Secret) are stored as plaintext in Moodle's config table, protected by AWS RDS encryption at rest (AES-256) and Moodle's own access controls. They are masked in the UI and never returned to the browser.
 
@@ -31,7 +31,7 @@ Credentials (Client ID and Client Secret) are stored as plaintext in Moodle's co
 | Co-organiser assignment | Not supported | Required per meeting; co-organiser role synced via Graph |
 | Enrollee calendar push (Outlook/Teams) | Not supported | Real Outlook/Teams invite on enrol |
 | Moodle LMS calendar | Not supported | Automatic — appears on dashboard and calendar page |
-| Calendar removal on completion | Not supported | Automatic |
+| Calendar removal on completion | Not supported | Automatic — removed on activity or course completion |
 | Attendance tracking | Not supported | Automatic via Graph attendance reports |
 | Attendance percentage | Not supported | Based on actual meeting duration, capped at 100% |
 | Attendance requirement | Not supported | Attend once (any) or attend all sessions |
@@ -43,7 +43,7 @@ Credentials (Client ID and Client Secret) are stored as plaintext in Moodle's co
 | Activity completion API | Not supported | Full custom_completion class (Moodle 4.2+ standard) |
 | IOMAD compatibility | Not tested | Compatible |
 | Database tables | 1 (7 fields) | 5 (purpose-built schema) |
-| Backup/restore | Yes | Yes |
+| Backup/restore | Yes | Yes (backup files included, FEATURE_BACKUP_MOODLE2 enabled) |
 | Privacy API (GDPR) | No | Yes |
 
 ---
@@ -249,6 +249,7 @@ php admin/cli/scheduled_task.php --execute=\\mod_msteamsecp\\task\\process_event
 - The delegated refresh token expires after 90 days. The settings page warns at 75 days. Re-authorization takes ~30 seconds — click **Authorize service account** and sign in as the service account.
 - IOMAD: the `local_iomad_observer::course_completed` observer will throw an exception if the course is not assigned to a company. This does not affect Moodle's own completion records — activity and course completion are written correctly before the IOMAD observer fires. Assign all courses to a company in IOMAD to prevent the exception.
 - Existing meetings created before 1.4.7 will not have Moodle calendar events. Open and re-save each activity to trigger the calendar sync.
+- Users sharing a computer who need manual completion credit: grant completion via Course → Reports → Activity completion → check the box for each affected user. The next cron run will stop sending them further invites.
 
 ---
 
@@ -265,6 +266,7 @@ php admin/cli/scheduled_task.php --execute=\\mod_msteamsecp\\task\\process_event
 | 1.4.5 | Inline HTML5 recording player with configurable watch threshold completion. Recordings stored under `mod_msteamsecp` filearea. Attendance requirement setting (attend once / attend all). Join button restricted to 15-minute pre-meeting window. |
 | 1.4.6 | Credential encryption removed — Client ID and Secret stored plaintext, masked in UI. AWS RDS encryption at rest provides storage-layer protection. Moodle 4.2 compatibility fixes. `monologo.svg` added for theme compatibility. `custom_completion` class replacing deprecated `_get_completion_state()` callback. Bug fixes: recurrence end date off-by-one, recording date format, `$CFG` scope in post_event_processor, settings page token status performance. |
 | 1.4.7 | Moodle LMS calendar integration — meeting events appear on course calendar, site calendar, upcoming events block, and dashboard timeline. Calendar action callback provides join link on dashboard, active 15 minutes before start, hidden after completion. Attendance percentage now based on actual meeting duration from Graph report, capped at 100%. Co-organiser field pre-populated on activity edit. `completion_attendance_pct` moved out of `customcompletionrules` to fix coding error. Calendar API callbacks use correct `mod_` prefix and `$userid` parameter. |
+| 1.5.0 | **Backup/restore enabled** — `FEATURE_BACKUP_MOODLE2` corrected to `true`; backup files were present but Moodle was not using them. **Activity completion calendar removal** — Outlook/Teams invites now removed immediately when activity completion is granted (via cron, recording watch, or manual admin grant), not only when the full course completes. New `course_module_completion_updated` observer and `on_activity_complete()` method in enrolment handler. **Manual completion support** — next-occurrence invite push and initial enrolment push both check Moodle's `course_modules_completion` table, so manually-granted completion (e.g. users sharing a computer) stops further invites correctly. All `MapleLMS` references replaced with `Moodle` throughout documentation. |
 
 ---
 

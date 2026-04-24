@@ -66,6 +66,23 @@ class enrolment_handler {
     public function push_events_for_user(object $instance, object $user): void {
         global $DB;
 
+        // Don't push invites to users who already have completion credit —
+        // this covers both plugin-granted and manually-granted completion.
+        $cmid = $DB->get_field('course_modules', 'id', [
+            'instance' => $instance->id,
+            'module'   => $DB->get_field('modules', 'id', ['name' => 'msteamsecp']),
+        ]);
+        if ($cmid) {
+            $already_complete = $DB->record_exists_select(
+                'course_modules_completion',
+                'coursemoduleid = :cmid AND userid = :userid AND completionstate >= 1',
+                ['cmid' => (int) $cmid, 'userid' => $user->id]
+            );
+            if ($already_complete) {
+                return;
+            }
+        }
+
         $all_mode = ($instance->attendance_requirement ?? 'any') === 'all';
         $limit    = $all_mode ? '' : 'LIMIT 1';
 
@@ -134,6 +151,61 @@ class enrolment_handler {
 
         } catch (\Throwable $e) {
             debugging('msteamsecp: failed to send Teams invitation to ' . $user->email . ': ' . $e->getMessage(), \DEBUG_DEVELOPER);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // On activity completion
+    // -------------------------------------------------------------------------
+
+    /**
+     * Called when a user earns activity completion credit on a msteamsecp instance.
+     * Removes future Outlook/Teams calendar invites for that specific meeting.
+     * This fires before course_completed, covering the gap where course completion
+     * is delayed or not configured.
+     *
+     * @param int $userid
+     * @param int $courseid
+     * @param int $instanceid  msteamsecp instance ID
+     */
+    public function on_activity_complete(int $userid, int $courseid, int $instanceid): void {
+        global $DB;
+
+        $user = $DB->get_record('user', ['id' => $userid]);
+        if (!$user) {
+            return;
+        }
+
+        // Remove all future invites for this specific meeting instance.
+        $sql = "SELECT ee.*
+                  FROM {msteamsecp_enrollee_events} ee
+                  JOIN {msteamsecp_occurrences} occ ON occ.id = ee.occurrenceid
+                 WHERE ee.userid    = :userid
+                   AND ee.instanceid = :instanceid
+                   AND ee.removed   = 0
+                   AND occ.starttime > :now";
+
+        $events = $DB->get_records_sql($sql, [
+            'userid'     => $userid,
+            'instanceid' => $instanceid,
+            'now'        => time(),
+        ]);
+
+        foreach ($events as $ee) {
+            if (!empty($ee->graph_event_id)) {
+                try {
+                    $this->graph->delete_user_event($user->email, $ee->graph_event_id);
+                } catch (\Throwable $e) {
+                    debugging('msteamsecp: failed to remove calendar event on activity completion: '
+                        . $e->getMessage(), \DEBUG_DEVELOPER);
+                }
+            }
+
+            $DB->update_record('msteamsecp_enrollee_events', (object) [
+                'id'          => $ee->id,
+                'removed'     => 1,
+                'timeremoved' => time(),
+            ]);
         }
     }
 

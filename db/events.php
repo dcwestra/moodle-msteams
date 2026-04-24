@@ -36,4 +36,15 @@ $observers = [
         'includefile' => '/mod/msteamsecp/lib.php',
         'internal'   => false,
     ],
+
+    // Activity completion updated — remove future Outlook invites when a user
+    // earns activity credit, even if the course itself hasn't completed yet.
+    // This covers the common case where the meeting is the only graded item
+    // and course completion fires separately or not at all.
+    [
+        'eventname'  => '\core\event\course_module_completion_updated',
+        'callback'   => 'msteamsecp_module_completion_updated',
+        'includefile' => '/mod/msteamsecp/lib.php',
+        'internal'   => false,
+    ],
 ];

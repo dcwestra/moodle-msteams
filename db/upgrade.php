@@ -130,5 +130,11 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026041300, 'msteamsecp');
     }
 
+    if ($oldversion < 2026042400) {
+        // v1.5.0 — No schema changes. New observers, backup support enabled,
+        // activity completion calendar removal fix.
+        upgrade_mod_savepoint(true, 2026042400, 'msteamsecp');
+    }
+
     return true;
 }
