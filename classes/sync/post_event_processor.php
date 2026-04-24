@@ -35,7 +35,9 @@ class post_event_processor {
      * but haven't had attendance or recording handled yet.
      */
     public function run(): void {
-        global $DB;
+        global $DB, $CFG;
+
+        require_once($CFG->libdir . '/completionlib.php');
 
         $now = time();
 

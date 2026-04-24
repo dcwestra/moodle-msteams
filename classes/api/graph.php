@@ -622,6 +622,10 @@ class graph {
      * @return array                 Decoded JSON response (empty array for 204)
      */
     public function request(string $method, string $path, ?array $body = null, bool $delegated = false): array {
+        global $CFG;
+        // Moodle's \curl class lives in lib/filelib.php — not always autoloaded in cron context.
+        require_once($CFG->libdir . '/filelib.php');
+
         $url  = self::GRAPH_BASE . $path;
         $curl = new \curl(['ignoresecurity' => true]);
         $curl->setopt(['CURLOPT_RETURNTRANSFER' => true, 'CURLOPT_TIMEOUT' => 60]);
