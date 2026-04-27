@@ -188,10 +188,17 @@ class meeting_creator {
         if (!empty($instance->graph_event_id)) {
             try {
                 $existing = $this->graph->get_event($instance->graph_event_id);
-                $this->graph->update_event($instance->graph_event_id, [
+                // Always re-include recurrence when patching a recurring series master.
+                // Graph API can silently truncate the series when recurrence is omitted
+                // from a PATCH — the last occurrence is dropped relative to today's date.
+                $patch = [
                     'attendees' => $this->build_calendar_attendees($coorganiser_emails),
                     'body'      => $existing['body'] ?? [],
-                ]);
+                ];
+                if (!empty($existing['recurrence'])) {
+                    $patch['recurrence'] = $existing['recurrence'];
+                }
+                $this->graph->update_event($instance->graph_event_id, $patch);
             } catch (\Throwable $e) {
                 debugging('msteamsecp: co-organiser calendar event sync failed: ' . $e->getMessage(), \DEBUG_DEVELOPER);
             }
@@ -538,7 +545,10 @@ class meeting_creator {
 
         if (!empty($instance->recurrence_end_date)) {
             $range['type']    = 'endDate';
-            $range['endDate'] = date('Y-m-d', $instance->recurrence_end_date);
+            // recurrence_end_date is stored as midnight in the user's local timezone.
+            // Adding 86399 (end of day) matches expand_recurrence's boundary and
+            // ensures the correct calendar date is sent regardless of server timezone.
+            $range['endDate'] = date('Y-m-d', (int) $instance->recurrence_end_date + 86399);
         } else {
             $range['type']                = 'numbered';
             $range['numberOfOccurrences'] = (int) ($instance->recurrence_count ?? 1);

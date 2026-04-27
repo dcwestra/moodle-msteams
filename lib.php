@@ -98,6 +98,11 @@ function msteamsecp_update_instance(stdClass $data, mod_msteamsecp_mod_form $mfo
     // Derive recording_behavior from attendance_requirement.
     if (!empty($data->is_recurring)) {
         $data->recording_behavior = ($data->attendance_requirement ?? 'any') === 'all' ? 'append' : 'replace';
+        if (($data->recurrence_end_type ?? 'date') === 'date') {
+            $data->recurrence_count = null;
+        } else {
+            $data->recurrence_end_date = null;
+        }
     } else {
         $data->attendance_requirement = 'any';
         $data->recording_behavior     = 'replace';
