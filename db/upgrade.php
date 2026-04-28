@@ -136,5 +136,12 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026042400, 'msteamsecp');
     }
 
+    if ($oldversion < 2026042701) {
+        // v1.5.1 — No schema changes. Bug fixes: recurring meeting last
+        // occurrence dropped when co-organiser set; recurrence endDate
+        // timezone correction; update_instance end-type normalisation.
+        upgrade_mod_savepoint(true, 2026042701, 'msteamsecp');
+    }
+
     return true;
 }
