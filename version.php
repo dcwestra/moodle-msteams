@@ -12,4 +12,4 @@ $plugin->component = 'mod_msteamsecp';
 $plugin->version   = 2026042701;
 $plugin->requires  = 2022112800; // Moodle 4.2+
 $plugin->maturity  = MATURITY_STABLE;
-$plugin->release   = '1.5.1';
+$plugin->release   = '1.5.2';
