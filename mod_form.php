@@ -31,10 +31,8 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
         $mform->addElement('header', 'timing_header', get_string('timing', 'mod_msteamsecp'));
 
         $mform->addElement('date_time_selector', 'starttime', get_string('starttime', 'mod_msteamsecp'));
-        $mform->addRule('starttime', null, 'required', null, 'client');
 
         $mform->addElement('date_time_selector', 'endtime', get_string('endtime', 'mod_msteamsecp'));
-        $mform->addRule('endtime', null, 'required', null, 'client');
 
         // ── Meeting settings ───────────────────────────────────────────────
         $mform->addElement('header', 'meeting_header', get_string('meeting_settings', 'mod_msteamsecp'));
