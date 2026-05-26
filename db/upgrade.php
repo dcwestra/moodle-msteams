@@ -143,5 +143,11 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026042701, 'msteamsecp');
     }
 
+    if ($oldversion < 2026052600) {
+        // v1.5.2 — No schema changes. Fix crash on meeting form submit caused
+        // by invalid client-side required rule on date_time_selector fields.
+        upgrade_mod_savepoint(true, 2026052600, 'msteamsecp');
+    }
+
     return true;
 }
