@@ -407,14 +407,7 @@ function msteamsecp_supports(string $feature): ?bool {
 function msteamsecp_get_coursemodule_info(stdClass $coursemodule) {
     global $DB;
 
-    $instance = $DB->get_record('msteamsecp', ['id' => $coursemodule->instance],
-        'id, name, intro, introformat');
-    if (!$instance) {
-        return false;
-    }
-
-    // Check for completion columns — may not exist on 4.2 before upgrade.
-    // Use a static flag so we only hit the schema once per request.
+    // Check once per request whether completion columns exist (added in v1.4.5).
     static $has_completion_cols = null;
     if ($has_completion_cols === null) {
         $dbman = $DB->get_manager();
@@ -424,14 +417,15 @@ function msteamsecp_get_coursemodule_info(stdClass $coursemodule) {
         );
     }
 
+    // Fetch all needed columns in a single query.
+    $fields = 'id, name, intro, introformat';
     if ($has_completion_cols) {
-        $extra = $DB->get_record('msteamsecp', ['id' => $coursemodule->instance],
-            'completion_attendance, completion_attendance_pct, completion_recording');
-        if ($extra) {
-            $instance->completion_attendance     = $extra->completion_attendance;
-            $instance->completion_attendance_pct = $extra->completion_attendance_pct;
-            $instance->completion_recording      = $extra->completion_recording;
-        }
+        $fields .= ', completion_attendance, completion_attendance_pct, completion_recording';
+    }
+
+    $instance = $DB->get_record('msteamsecp', ['id' => $coursemodule->instance], $fields);
+    if (!$instance) {
+        return false;
     }
 
     $result = new cached_cm_info();

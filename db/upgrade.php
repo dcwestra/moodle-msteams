@@ -149,5 +149,20 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026052600, 'msteamsecp');
     }
 
+    if ($oldversion < 2026052700) {
+        // v1.5.3 — No schema changes. Switch co-organiser autocomplete from
+        // pre-loading all users to AJAX search; prevents page freeze on
+        // large multi-tenant installs (IOMAD) when date picker dropdowns fire
+        // change events that trigger Moodle's hideIf DOM traversal.
+        upgrade_mod_savepoint(true, 2026052700, 'msteamsecp');
+    }
+
+    if ($oldversion < 2026052701) {
+        // v1.5.4 — No schema changes. Merge two get_record() calls in
+        // msteamsecp_get_coursemodule_info() into one to halve DB queries
+        // on course pages with multiple activity instances.
+        upgrade_mod_savepoint(true, 2026052701, 'msteamsecp');
+    }
+
     return true;
 }
