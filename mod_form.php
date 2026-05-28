@@ -137,34 +137,12 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
         // ── Co-organisers ──────────────────────────────────────────────────────
         $mform->addElement('header', 'coorganisers_header', get_string('coorganisers', 'mod_msteamsecp'));
 
-        // Searchable autocomplete of all active non-guest LMS users.
-        // At least one co-organiser is required — they bypass the lobby and
-        // can start the meeting, admit participants, and control the session.
-        global $DB;
-        $users = $DB->get_records_select(
-            'user',
-            'deleted = 0 AND suspended = 0 AND id > 1',
-            [],
-            'lastname ASC, firstname ASC',
-            'id, firstname, lastname, firstnamephonetic, lastnamephonetic, middlename, alternatename, email'
-        );
-        $user_options = [];
-        foreach ($users as $u) {
-            if (!empty($u->email)) {
-                $user_options[$u->id] = fullname($u) . ' (' . $u->email . ')';
-            }
-        }
-
-        $mform->addElement('autocomplete', 'coorganiser_userids',
+        $mform->addElement('textarea', 'coorganiser_emails',
             get_string('coorganisers', 'mod_msteamsecp'),
-            $user_options,
-            [
-                'multiple'          => true,
-                'noselectionstring' => get_string('coorganisers_none', 'mod_msteamsecp'),
-                'tags'              => false,
-            ]
+            ['rows' => 4, 'cols' => 50, 'placeholder' => "user1@example.com\nuser2@example.com"]
         );
-        $mform->addHelpButton('coorganiser_userids', 'coorganisers', 'mod_msteamsecp');
+        $mform->setType('coorganiser_emails', PARAM_TEXT);
+        $mform->addHelpButton('coorganiser_emails', 'coorganisers', 'mod_msteamsecp');
 
         // Standard Moodle completion fields — our custom rules are added via
         // add_completion_rules() below, which Moodle calls from within this.
@@ -246,8 +224,16 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
         // Co-organiser is required — without one, learners will be stuck in
         // the lobby with no one to admit them (the service account is never
         // present in the meeting).
-        if (empty($data['coorganiser_userids'])) {
-            $errors['coorganiser_userids'] = get_string('error_coorganiser_required', 'mod_msteamsecp');
+        $raw_emails = preg_split('/[\s,;]+/', trim($data['coorganiser_emails'] ?? ''), -1, PREG_SPLIT_NO_EMPTY);
+        if (empty($raw_emails)) {
+            $errors['coorganiser_emails'] = get_string('error_coorganiser_required', 'mod_msteamsecp');
+        } else {
+            foreach ($raw_emails as $email) {
+                if (!validate_email($email)) {
+                    $errors['coorganiser_emails'] = get_string('error_coorganiser_email_invalid', 'mod_msteamsecp');
+                    break;
+                }
+            }
         }
 
         return $errors;
@@ -273,17 +259,16 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
             $data->attendance_requirement = ($data->recording_behavior === 'append') ? 'all' : 'any';
         }
 
-        // Re-populate co-organiser selections from the DB so the autocomplete
-        // field shows existing choices when editing an activity.
+        // Load existing co-organiser emails for display when editing.
         if (!empty($data->instance)) {
-            $coorganiser_ids = $DB->get_fieldset_select(
+            $emails = $DB->get_fieldset_select(
                 'msteamsecp_coorganisers',
-                'userid',
-                'instanceid = :instanceid',
+                'email',
+                "instanceid = :instanceid AND email <> ''",
                 ['instanceid' => $data->instance]
             );
-            if (!empty($coorganiser_ids)) {
-                $data->coorganiser_userids = $coorganiser_ids;
+            if (!empty($emails)) {
+                $data->coorganiser_emails = implode("\n", $emails);
             }
         }
 

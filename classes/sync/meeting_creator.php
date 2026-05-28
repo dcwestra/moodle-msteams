@@ -212,17 +212,17 @@ class meeting_creator {
      * @param int   $instanceid
      * @param array $userids     Array of user IDs selected in the form
      */
-    public function save_coorganisers(int $instanceid, array $userids): void {
+    public function save_coorganisers(int $instanceid, array $emails): void {
         global $DB;
 
         $DB->delete_records('msteamsecp_coorganisers', ['instanceid' => $instanceid]);
 
-        foreach ($userids as $userid) {
-            $userid = (int) $userid;
-            if ($userid > 0) {
+        foreach ($emails as $email) {
+            $email = strtolower(trim($email));
+            if ($email !== '') {
                 $DB->insert_record('msteamsecp_coorganisers', (object) [
                     'instanceid'  => $instanceid,
-                    'userid'      => $userid,
+                    'email'       => $email,
                     'timecreated' => time(),
                 ]);
             }
@@ -426,14 +426,13 @@ class meeting_creator {
     private function get_coorganiser_emails(int $instanceid): array {
         global $DB;
 
-        $sql = "SELECT u.email
-                  FROM {msteamsecp_coorganisers} c
-                  JOIN {user} u ON u.id = c.userid AND u.deleted = 0 AND u.suspended = 0
-                 WHERE c.instanceid = :instanceid AND u.email <> ''";
-
-        return array_column(
-            array_values($DB->get_records_sql($sql, ['instanceid' => $instanceid])),
-            'email'
+        return array_values(
+            $DB->get_fieldset_select(
+                'msteamsecp_coorganisers',
+                'email',
+                "instanceid = :instanceid AND email <> ''",
+                ['instanceid' => $instanceid]
+            )
         );
     }
 

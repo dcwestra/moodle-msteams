@@ -51,8 +51,8 @@ function msteamsecp_add_instance(stdClass $data, mod_msteamsecp_mod_form $mform 
 
     // Save co-organiser selections.
     $creator = new \mod_msteamsecp\sync\meeting_creator();
-    $coorganiser_ids = !empty($data->coorganiser_userids) ? (array) $data->coorganiser_userids : [];
-    $creator->save_coorganisers($data->id, $coorganiser_ids);
+    $coorganiser_emails = preg_split('/[\s,;]+/', trim($data->coorganiser_emails ?? ''), -1, PREG_SPLIT_NO_EMPTY);
+    $creator->save_coorganisers($data->id, array_filter(array_map('trim', $coorganiser_emails)));
 
     // Check delegated token health and notify if action needed.
     msteamsecp_notify_token_status();
@@ -112,8 +112,8 @@ function msteamsecp_update_instance(stdClass $data, mod_msteamsecp_mod_form $mfo
 
     // Save co-organiser selections.
     $creator = new \mod_msteamsecp\sync\meeting_creator();
-    $coorganiser_ids = !empty($data->coorganiser_userids) ? (array) $data->coorganiser_userids : [];
-    $creator->save_coorganisers($data->id, $coorganiser_ids);
+    $coorganiser_emails = preg_split('/[\s,;]+/', trim($data->coorganiser_emails ?? ''), -1, PREG_SPLIT_NO_EMPTY);
+    $creator->save_coorganisers($data->id, array_filter(array_map('trim', $coorganiser_emails)));
 
     msteamsecp_notify_token_status();
 

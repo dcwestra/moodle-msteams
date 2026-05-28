@@ -164,5 +164,54 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026052701, 'msteamsecp');
     }
 
+    if ($oldversion < 2026052800) {
+        // v1.5.5 — Replace LMS user-ID-based co-organiser selection with
+        // direct email entry. The coorganisers table gains an email column;
+        // userid becomes nullable (existing records migrated); the user FK
+        // and old unique index are removed.
+        $table = new xmldb_table('msteamsecp_coorganisers');
+
+        // Add email column.
+        $field = new xmldb_field('email', XMLDB_TYPE_CHAR, '255', null, false, null, '');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        // Migrate existing rows — copy email from the linked LMS user.
+        $rows = $DB->get_records_sql(
+            "SELECT c.id, u.email
+               FROM {msteamsecp_coorganisers} c
+               JOIN {user} u ON u.id = c.userid
+              WHERE (c.email IS NULL OR c.email = '') AND u.deleted = 0"
+        );
+        foreach ($rows as $row) {
+            $DB->set_field('msteamsecp_coorganisers', 'email', $row->email, ['id' => $row->id]);
+        }
+
+        // Drop the foreign key on userid so NULL values are valid.
+        $key = new xmldb_key('fk_user', XMLDB_KEY_FOREIGN, ['userid'], 'user', ['id']);
+        if ($dbman->find_key_name($table, $key)) {
+            $dbman->drop_key($table, $key);
+        }
+
+        // Make userid nullable.
+        $field = new xmldb_field('userid', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
+        $dbman->change_field_notnull($table, $field);
+
+        // Drop old unique index on (instanceid, userid).
+        $index = new xmldb_index('idx_instance_user', XMLDB_INDEX_UNIQUE, ['instanceid', 'userid']);
+        if ($dbman->index_exists($table, $index)) {
+            $dbman->drop_index($table, $index);
+        }
+
+        // Add unique index on (instanceid, email).
+        $index = new xmldb_index('idx_instance_email', XMLDB_INDEX_UNIQUE, ['instanceid', 'email']);
+        if (!$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+
+        upgrade_mod_savepoint(true, 2026052800, 'msteamsecp');
+    }
+
     return true;
 }

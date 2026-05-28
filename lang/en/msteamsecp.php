@@ -126,7 +126,8 @@ $string['error_graph_method']         = 'Unsupported HTTP method: {$a}';
 $string['error_recording_download']   = 'Recording download failed (HTTP {$a}).';
 $string['error_endtime_before_start'] = 'End time must be after start time.';
 $string['error_recurrence_count']     = 'Please enter a valid number of occurrences (minimum 1).';
-$string['error_coorganiser_required'] = 'At least one co-organiser must be selected. Without a co-organiser, learners will be held in the lobby with no one to admit them.';
+$string['error_coorganiser_required']      = 'At least one co-organiser email is required. Without a co-organiser, learners will be held in the lobby with no one to admit them.';
+$string['error_coorganiser_email_invalid'] = 'One or more email addresses are not valid. Enter one email per line (or comma-separated).';
 
 // Task.
 $string['task_process_events'] = 'Teams Meeting ECP — Post-event processor (attendance & recordings)';
@@ -153,8 +154,7 @@ $string['privacy:export:calendar_events']                 = 'Calendar Events';
 
 // Co-organisers.
 $string['coorganisers']      = 'Co-organisers';
-$string['coorganisers_help'] = 'Select at least one co-organiser for this meeting. Co-organisers receive a calendar invite and can bypass the lobby, start the meeting, admit participants, manage recording, and control the session. Without a co-organiser, learners will be held in the lobby with no one to admit them.';
-$string['coorganisers_none'] = 'No co-organisers selected';
+$string['coorganisers_help'] = 'Enter the Microsoft 365 email address of at least one co-organiser, one per line (or comma-separated). Co-organisers can bypass the lobby, start the meeting, admit participants, manage recording, and control the session. Without a co-organiser, learners will be held in the lobby with no one to admit them. These emails are used only for the Teams meeting — no LMS roles or permissions are changed.';
 
 $string['add_to_calendar'] = 'Add to calendar (.ics)';
 

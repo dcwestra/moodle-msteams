@@ -117,21 +117,20 @@
     </TABLE>
 
 
-    <!-- Co-organisers manually selected per meeting instance -->
-    <TABLE NAME="msteamsecp_coorganisers" COMMENT="Manually selected co-organisers per meeting">
+    <!-- Co-organisers entered as email addresses per meeting instance -->
+    <TABLE NAME="msteamsecp_coorganisers" COMMENT="Email-based co-organisers per meeting">
       <FIELDS>
-        <FIELD NAME="id"         TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
-        <FIELD NAME="instanceid" TYPE="int" LENGTH="10" NOTNULL="true"/>
-        <FIELD NAME="userid"     TYPE="int" LENGTH="10" NOTNULL="true"/>
-        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="id"          TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="instanceid"  TYPE="int"  LENGTH="10"  NOTNULL="true"/>
+        <FIELD NAME="email"       TYPE="char" LENGTH="255" NOTNULL="true" DEFAULT=""/>
+        <FIELD NAME="timecreated" TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary"     TYPE="primary" FIELDS="id"/>
         <KEY NAME="fk_instance" TYPE="foreign" FIELDS="instanceid" REFTABLE="msteamsecp" REFFIELDS="id"/>
-        <KEY NAME="fk_user"     TYPE="foreign" FIELDS="userid"     REFTABLE="user"        REFFIELDS="id"/>
       </KEYS>
       <INDEXES>
-        <INDEX NAME="idx_instance_user" UNIQUE="true" FIELDS="instanceid, userid"/>
+        <INDEX NAME="idx_instance_email" UNIQUE="true" FIELDS="instanceid, email"/>
       </INDEXES>
     </TABLE>
 
