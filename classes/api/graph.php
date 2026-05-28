@@ -340,13 +340,6 @@ class graph {
     }
 
     /**
-     * Download a recording file from its content URL.
-     * Returns the raw binary content.
-     *
-     * @param string $content_url  Recording content URL from Graph
-     * @return string              Raw file binary
-     */
-    /**
      * Download a recording file from its content URL and write it to disk.
      * Streams directly to a temp file to avoid loading large video into memory.
      *

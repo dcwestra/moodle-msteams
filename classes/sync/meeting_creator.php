@@ -209,8 +209,8 @@ class meeting_creator {
      * Save co-organiser selections from form data.
      * Called from lib.php after add_instance / update_instance.
      *
-     * @param int   $instanceid
-     * @param array $userids     Array of user IDs selected in the form
+     * @param int      $instanceid
+     * @param string[] $emails  Email addresses entered in the co-organiser textarea
      */
     public function save_coorganisers(int $instanceid, array $emails): void {
         global $DB;

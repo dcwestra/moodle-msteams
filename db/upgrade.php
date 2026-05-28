@@ -188,6 +188,12 @@ function xmldb_msteamsecp_upgrade($oldversion) {
             $DB->set_field('msteamsecp_coorganisers', 'email', $row->email, ['id' => $row->id]);
         }
 
+        // Drop old unique index on (instanceid, userid) BEFORE modifying the column.
+        $index = new xmldb_index('idx_instance_user', XMLDB_INDEX_UNIQUE, ['instanceid', 'userid']);
+        if ($dbman->index_exists($table, $index)) {
+            $dbman->drop_index($table, $index);
+        }
+
         // Drop the foreign key on userid so NULL values are valid.
         $key = new xmldb_key('fk_user', XMLDB_KEY_FOREIGN, ['userid'], 'user', ['id']);
         if ($dbman->find_key_name($table, $key)) {
@@ -197,12 +203,6 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         // Make userid nullable.
         $field = new xmldb_field('userid', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
         $dbman->change_field_notnull($table, $field);
-
-        // Drop old unique index on (instanceid, userid).
-        $index = new xmldb_index('idx_instance_user', XMLDB_INDEX_UNIQUE, ['instanceid', 'userid']);
-        if ($dbman->index_exists($table, $index)) {
-            $dbman->drop_index($table, $index);
-        }
 
         // Add unique index on (instanceid, email).
         $index = new xmldb_index('idx_instance_email', XMLDB_INDEX_UNIQUE, ['instanceid', 'email']);

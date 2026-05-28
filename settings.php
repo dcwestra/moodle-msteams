@@ -171,19 +171,6 @@ if ($hassiteconfig) {
         $status_html
     ));
 
-    // ── Role mapping ──────────────────────────────────────────────────────
-    $settings->add(new admin_setting_heading(
-        'mod_msteamsecp/roles_heading',
-        get_string('settings_roles_heading', 'mod_msteamsecp'), ''
-    ));
-
-    $settings->add(new admin_setting_configtext(
-        'mod_msteamsecp/coorganiser_roles',
-        get_string('settings_coorganiser_roles', 'mod_msteamsecp'),
-        get_string('settings_coorganiser_roles_desc', 'mod_msteamsecp'),
-        'editingteacher,teacher,manager'
-    ));
-
     // ── Defaults ──────────────────────────────────────────────────────────
     $settings->add(new admin_setting_heading(
         'mod_msteamsecp/defaults_heading',

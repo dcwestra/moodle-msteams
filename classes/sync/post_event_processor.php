@@ -386,9 +386,9 @@ class post_event_processor {
             $filename = 'recording_' . $occ->instanceid . '_' . $occ->id . '_' . date('Ymd', $occ->starttime) . '.mp4';
 
             if ($occ->recording_behavior === 'replace' && !empty($occ->recording_cmid)) {
-                $this->replace_recording_activity($occ, $tmp_path, $filename, 0);
+                $this->replace_recording_activity($occ, $tmp_path, $filename);
             } else {
-                $anchor = $this->create_recording_activity($occ, $tmp_path, $filename, 0);
+                $anchor = $this->create_recording_activity($occ, $tmp_path, $filename);
                 $DB->update_record('msteamsecp_occurrences', (object) [
                     'id'              => $occ->id,
                     'recording_cmid'  => $anchor,
@@ -412,7 +412,7 @@ class post_event_processor {
      * @param int    $section_id
      * @return int   New course module ID
      */
-    private function create_recording_activity(object $occ, string $tmp_path, string $filename, int $section_id): int {
+    private function create_recording_activity(object $occ, string $tmp_path, string $filename): int {
         global $DB, $CFG;
 
         // Store the recording file under the mod_msteamsecp component so it can
@@ -453,18 +453,9 @@ class post_event_processor {
     }
 
     /**
-     * Add a newly created recording activity to the course completion criteria.
-     * Uses activity completion aggregation — any one activity completing is
-     * sufficient for course completion. Learners who already have completion
-     * (via attendance) are unaffected.
-     *
-     * @param int $courseid
-     * @param int $cmid  Course module ID of the recording activity
-     */
-    /**
      * Replace the file on an existing recording activity (replace mode).
      */
-    private function replace_recording_activity(object $occ, string $tmp_path, string $filename, int $section_id): void {
+    private function replace_recording_activity(object $occ, string $tmp_path, string $filename): void {
         global $DB;
 
         // Ensure cmid is resolved — may not be set if called outside process_recording.
@@ -566,15 +557,4 @@ class post_event_processor {
         $completion->update_state($cm, \COMPLETION_COMPLETE, $userid);
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
-    private function recording_title(object $occ): string {
-        return $occ->meeting_name . ' — ' . userdate($occ->starttime, get_string('strftimedatefullshort', 'langconfig'));
-    }
-
-    private function to_iso8601(int $timestamp): string {
-        return gmdate('Y-m-d\TH:i:s\Z', $timestamp);
-    }
 }
