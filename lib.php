@@ -510,7 +510,7 @@ function msteamsecp_pluginfile(
  * @return bool
  */
 function mod_msteamsecp_core_calendar_is_event_visible(calendar_event $event, int $userid = 0): bool {
-    global $CFG, $USER;
+    global $CFG, $DB, $USER;
     require_once($CFG->dirroot . '/calendar/lib.php');
     if (empty($userid)) {
         $userid = $USER->id;
@@ -519,7 +519,51 @@ function mod_msteamsecp_core_calendar_is_event_visible(calendar_event $event, in
     if (!$cm) {
         return false;
     }
-    return has_capability('mod/msteamsecp:view', context_module::instance($cm->id), $userid);
+    if (!has_capability('mod/msteamsecp:view', context_module::instance($cm->id), $userid)) {
+        return false;
+    }
+
+    // Managers and teachers always see all occurrences.
+    if (has_capability('moodle/course:manageactivities', context_course::instance($event->courseid), $userid)) {
+        return true;
+    }
+
+    // Cache instance record — this callback fires once per calendar event per page load.
+    static $instance_cache = [];
+    $iid = (int) $event->instance;
+    if (!isset($instance_cache[$iid])) {
+        $instance_cache[$iid] = $DB->get_record('msteamsecp', ['id' => $iid], 'id, attendance_requirement, is_recurring');
+    }
+    $instance = $instance_cache[$iid];
+
+    // Non-recurring or attend-all: show every occurrence.
+    if (!$instance || !$instance->is_recurring || ($instance->attendance_requirement ?? 'any') === 'all') {
+        return true;
+    }
+
+    // Attend-once: hide everything once the learner already has credit.
+    $complete = $DB->record_exists_select(
+        'course_modules_completion',
+        'coursemoduleid = :cmid AND userid = :userid AND completionstate >= 1',
+        ['cmid' => (int) $cm->id, 'userid' => $userid]
+    );
+    if ($complete) {
+        return false;
+    }
+
+    // Show only the first upcoming occurrence — same rolling logic as the Teams invite push.
+    static $next_cache = [];
+    if (!array_key_exists($iid, $next_cache)) {
+        $next_cache[$iid] = (int) ($DB->get_field_sql(
+            "SELECT starttime FROM {msteamsecp_occurrences}
+              WHERE instanceid = :instanceid AND status = 'upcoming'
+           ORDER BY starttime ASC
+              LIMIT 1",
+            ['instanceid' => $iid]
+        ) ?: 0);
+    }
+
+    return $next_cache[$iid] > 0 && (int) $event->timestart === $next_cache[$iid];
 }
 
 /**
