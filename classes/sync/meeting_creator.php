@@ -382,7 +382,10 @@ class meeting_creator {
 
         while ($count < $max && $current <= $end_date) {
             if ($instance->recurrence_type === 'weekly' && !empty($days_of_week)) {
-                for ($d = 0; $d < (7 * $interval); $d++) {
+                // Scan only the FIRST 7 days of each interval window.
+                // The window advances by (7 * interval) days each iteration,
+                // so only one occurrence of each day-of-week is possible per window.
+                for ($d = 0; $d < 7; $d++) {
                     $candidate = strtotime("+$d days", $current);
                     $dow = (int) date('N', $candidate);
                     if (in_array($dow, $days_of_week) && $candidate <= $end_date && $count < $max) {
