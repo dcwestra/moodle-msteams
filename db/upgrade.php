@@ -213,5 +213,14 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026052800, 'msteamsecp');
     }
 
+    if ($oldversion < 2026060200) {
+        // v1.5.6 — No schema changes. Fix bi-weekly occurrence expansion
+        // (expand_recurrence scanned 7*interval days per window, producing
+        // weekly occurrences for bi-weekly meetings). Add attend-once filtering
+        // to the LMS calendar visibility callback so learners see only their
+        // next due occurrence, mirroring the Teams rolling-push behaviour.
+        upgrade_mod_savepoint(true, 2026060200, 'msteamsecp');
+    }
+
     return true;
 }
