@@ -55,6 +55,25 @@ class enrolment_handler {
     }
 
     /**
+     * Push calendar invites to all currently enrolled active learners for a
+     * given instance. Called after a meeting is edited so that learners receive
+     * updated Outlook invites reflecting the new schedule.
+     *
+     * push_events_for_user() handles the per-user logic: skips completed users,
+     * respects attend-once vs. attend-all mode, and only sends invites for
+     * occurrences that don't already have a tracking row.
+     *
+     * @param object $instance  msteamsecp record
+     */
+    public function push_events_for_instance(object $instance): void {
+        $context = \context_course::instance($instance->course);
+        $users   = get_enrolled_users($context, '', 0, 'u.*', null, 0, 0, true);
+        foreach ($users as $user) {
+            $this->push_events_for_user($instance, $user);
+        }
+    }
+
+    /**
      * Push calendar event(s) to a user's Outlook calendar.
      *
      * 'any' mode (attend once): push only the next upcoming occurrence not yet sent.

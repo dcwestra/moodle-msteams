@@ -83,7 +83,97 @@ class meeting_creator {
             debugging('msteamsecp: Graph meeting update failed: ' . $e->getMessage(), \DEBUG_DEVELOPER);
         }
 
+        $this->sync_occurrences($instance);
+
+        // Re-push Outlook invites to enrolled learners using the updated occurrence schedule.
+        $handler = new enrolment_handler();
+        $handler->push_events_for_instance($instance);
+
         $this->sync_coorganisers($instance);
+    }
+
+    /**
+     * Rebuild upcoming occurrence rows after an instance edit so that
+     * msteamsecp_sync_calendar_events() recreates LMS calendar events with
+     * the correct schedule.
+     *
+     * Ended rows are left intact — they carry attendance and completion data.
+     * For recurring meetings, upcoming occurrences are replaced (existing
+     * Outlook invites are retracted first so learners are not left with stale
+     * calendar entries). For single meetings, starttime/endtime are stamped
+     * in-place after retracting the current invite.
+     *
+     * @param object $instance  msteamsecp record
+     */
+    private function sync_occurrences(object $instance): void {
+        global $DB;
+
+        if ($instance->is_recurring) {
+            $upcoming_ids = $DB->get_fieldset_select(
+                'msteamsecp_occurrences',
+                'id',
+                "instanceid = :id AND status != 'ended'",
+                ['id' => $instance->id]
+            );
+            if ($upcoming_ids) {
+                $this->retract_enrollee_events($upcoming_ids);
+                [$in_sql, $in_params] = $DB->get_in_or_equal($upcoming_ids);
+                $DB->delete_records_select('msteamsecp_occurrences', "id $in_sql", $in_params);
+            }
+            $this->generate_occurrence_rows(
+                $instance,
+                $instance->graph_meeting_id,
+                $instance->graph_event_id ?? ''
+            );
+        } else {
+            $occ_ids = $DB->get_fieldset_select(
+                'msteamsecp_occurrences',
+                'id',
+                "instanceid = :id AND status != 'ended'",
+                ['id' => $instance->id]
+            );
+            if ($occ_ids) {
+                $this->retract_enrollee_events($occ_ids);
+            }
+            $DB->execute(
+                "UPDATE {msteamsecp_occurrences}
+                    SET starttime = :start, endtime = :end
+                  WHERE instanceid = :id AND status != 'ended'",
+                ['start' => $instance->starttime, 'end' => $instance->endtime, 'id' => $instance->id]
+            );
+        }
+    }
+
+    /**
+     * Delete Outlook calendar invites from learners' calendars via Graph and
+     * remove the corresponding enrollee_event tracking rows.
+     *
+     * @param int[] $occ_ids  msteamsecp_occurrences IDs whose invites should be retracted
+     */
+    private function retract_enrollee_events(array $occ_ids): void {
+        global $DB;
+
+        [$in_sql, $in_params] = $DB->get_in_or_equal($occ_ids);
+        $enrollee_events = $DB->get_records_select(
+            'msteamsecp_enrollee_events',
+            "occurrenceid $in_sql AND removed = 0",
+            $in_params
+        );
+
+        foreach ($enrollee_events as $ee) {
+            if (!empty($ee->graph_event_id)) {
+                try {
+                    $user = $DB->get_record('user', ['id' => $ee->userid]);
+                    if ($user && !empty($user->email)) {
+                        $this->graph->delete_user_event($user->email, $ee->graph_event_id);
+                    }
+                } catch (\Throwable $e) {
+                    debugging('msteamsecp: could not retract calendar invite: ' . $e->getMessage(), \DEBUG_DEVELOPER);
+                }
+            }
+        }
+
+        $DB->delete_records_select('msteamsecp_enrollee_events', "occurrenceid $in_sql", $in_params);
     }
 
     /**
