@@ -261,11 +261,12 @@ class meeting_creator {
         // Setting those fields causes the Calendar API to create a brand new
         // Teams meeting, generating a different meeting ID and ignoring the one
         // we just created above. The join link lives only in the event body HTML.
+        $tz = \core_date::get_server_timezone();
         $event_params = [
             'subject'   => $instance->name,
             'body'      => $this->build_event_body($course->fullname, $join_url),
-            'start'     => ['dateTime' => $this->to_iso8601($instance->starttime), 'timeZone' => 'UTC'],
-            'end'       => ['dateTime' => $this->to_iso8601($instance->endtime),   'timeZone' => 'UTC'],
+            'start'     => ['dateTime' => $this->to_local_datetime($instance->starttime), 'timeZone' => $tz],
+            'end'       => ['dateTime' => $this->to_local_datetime($instance->endtime),   'timeZone' => $tz],
             'attendees' => $this->build_calendar_attendees($coorganiser_emails),
         ];
 
@@ -317,11 +318,12 @@ class meeting_creator {
         $join_url = $meeting['joinWebUrl'] ?? '';
 
         // Calendar event references the meeting via body only — no isOnlineMeeting.
+        $tz = \core_date::get_server_timezone();
         $event_params = [
             'subject'   => $instance->name,
             'body'      => $this->build_event_body($course->fullname, $join_url),
-            'start'     => ['dateTime' => $this->to_iso8601($instance->starttime), 'timeZone' => 'UTC'],
-            'end'       => ['dateTime' => $this->to_iso8601($instance->endtime),   'timeZone' => 'UTC'],
+            'start'     => ['dateTime' => $this->to_local_datetime($instance->starttime), 'timeZone' => $tz],
+            'end'       => ['dateTime' => $this->to_local_datetime($instance->endtime),   'timeZone' => $tz],
             'recurrence'=> $this->build_recurrence_pattern($instance),
             'attendees' => $this->build_calendar_attendees($coorganiser_emails),
         ];
@@ -365,7 +367,6 @@ class meeting_creator {
 
     private function expand_recurrence(object $instance): array {
         $starts   = [];
-        $current  = $instance->starttime;
         $interval = max(1, (int) $instance->recurrence_interval);
         $count    = 0;
         $max      = $instance->recurrence_count ? (int) $instance->recurrence_count : 500;
@@ -375,37 +376,43 @@ class meeting_creator {
             ? (int) $instance->recurrence_end_date + 86399
             : \PHP_INT_MAX;
 
+        // Work in the site timezone so that +N days preserves wall-clock time
+        // across DST transitions. Without this, adding 7*86400 seconds shifts
+        // meetings by one hour after clocks fall back (e.g. 11am becomes 10am).
+        $tz      = new \DateTimeZone(\core_date::get_server_timezone());
+        $current = (new \DateTimeImmutable('@' . (int) $instance->starttime))->setTimezone($tz);
+
         $days_of_week = [];
         if ($instance->recurrence_type === 'weekly' && !empty($instance->recurrence_days_of_week)) {
             $days_of_week = json_decode($instance->recurrence_days_of_week, true) ?? [];
         }
 
-        while ($count < $max && $current <= $end_date) {
+        while ($count < $max && $current->getTimestamp() <= $end_date) {
             if ($instance->recurrence_type === 'weekly' && !empty($days_of_week)) {
                 // Scan only the FIRST 7 days of each interval window.
                 // The window advances by (7 * interval) days each iteration,
                 // so only one occurrence of each day-of-week is possible per window.
                 for ($d = 0; $d < 7; $d++) {
-                    $candidate = strtotime("+$d days", $current);
-                    $dow = (int) date('N', $candidate);
-                    if (in_array($dow, $days_of_week) && $candidate <= $end_date && $count < $max) {
-                        $starts[] = $candidate;
+                    $candidate = $current->modify("+{$d} days");
+                    $dow = (int) $candidate->format('N');
+                    if (in_array($dow, $days_of_week) && $candidate->getTimestamp() <= $end_date && $count < $max) {
+                        $starts[] = $candidate->getTimestamp();
                         $count++;
                     }
                 }
-                $current = strtotime('+' . (7 * $interval) . ' days', $current);
+                $current = $current->modify('+' . (7 * $interval) . ' days');
             } else {
-                $starts[] = $current;
+                $starts[] = $current->getTimestamp();
                 $count++;
                 switch ($instance->recurrence_type) {
                     case 'daily':
-                        $current = strtotime("+{$interval} days", $current);
+                        $current = $current->modify("+{$interval} days");
                         break;
                     case 'weekly':
-                        $current = strtotime('+' . (7 * $interval) . ' days', $current);
+                        $current = $current->modify('+' . (7 * $interval) . ' days');
                         break;
                     case 'monthly':
-                        $current = strtotime("+{$interval} months", $current);
+                        $current = $current->modify("+{$interval} months");
                         break;
                     default:
                         break 2;
@@ -543,14 +550,14 @@ class meeting_creator {
             ));
         }
 
-        $range = ['startDate' => date('Y-m-d', $instance->starttime)];
+        $tz    = new \DateTimeZone(\core_date::get_server_timezone());
+        $range = ['startDate' => (new \DateTimeImmutable('@' . (int) $instance->starttime))->setTimezone($tz)->format('Y-m-d')];
 
         if (!empty($instance->recurrence_end_date)) {
             $range['type']    = 'endDate';
-            // recurrence_end_date is stored as midnight in the user's local timezone.
-            // Adding 86399 (end of day) matches expand_recurrence's boundary and
-            // ensures the correct calendar date is sent regardless of server timezone.
-            $range['endDate'] = date('Y-m-d', (int) $instance->recurrence_end_date + 86399);
+            // +86399 pushes into end-of-day so the correct date is selected
+            // regardless of where midnight falls in the site timezone.
+            $range['endDate'] = (new \DateTimeImmutable('@' . ((int) $instance->recurrence_end_date + 86399)))->setTimezone($tz)->format('Y-m-d');
         } else {
             $range['type']                = 'numbered';
             $range['numberOfOccurrences'] = (int) ($instance->recurrence_count ?? 1);
@@ -561,6 +568,11 @@ class meeting_creator {
 
     private function to_iso8601(int $timestamp): string {
         return gmdate('Y-m-d\TH:i:s\Z', $timestamp);
+    }
+
+    private function to_local_datetime(int $timestamp): string {
+        $tz = new \DateTimeZone(\core_date::get_server_timezone());
+        return (new \DateTimeImmutable('@' . $timestamp))->setTimezone($tz)->format('Y-m-d\TH:i:s');
     }
 
     /**

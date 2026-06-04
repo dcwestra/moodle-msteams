@@ -131,12 +131,13 @@ class enrolment_handler {
             // meeting when called in the context of the Teams-licensed service account,
             // generating a different meeting ID and passcode for the learner.
             // Writing to /users/{email}/events on the learner's calendar avoids this.
+            $tz       = \core_date::get_server_timezone();
             $join_url = $instance->join_url ?? '';
             $event = $this->graph->create_user_event($user->email, [
                 'subject'  => $instance->name,
                 'body'     => $this->build_event_body_with_link($instance->intro ?? '', $join_url),
-                'start'    => ['dateTime' => $this->to_iso8601($occurrence->starttime), 'timeZone' => 'UTC'],
-                'end'      => ['dateTime' => $this->to_iso8601($occurrence->endtime),   'timeZone' => 'UTC'],
+                'start'    => ['dateTime' => $this->to_local_datetime($occurrence->starttime), 'timeZone' => $tz],
+                'end'      => ['dateTime' => $this->to_local_datetime($occurrence->endtime),   'timeZone' => $tz],
                 'location' => ['displayName' => $join_url],
             ]);
 
@@ -282,6 +283,11 @@ class enrolment_handler {
 
     private function to_iso8601(int $timestamp): string {
         return gmdate('Y-m-d\TH:i:s\Z', $timestamp);
+    }
+
+    private function to_local_datetime(int $timestamp): string {
+        $tz = new \DateTimeZone(\core_date::get_server_timezone());
+        return (new \DateTimeImmutable('@' . $timestamp))->setTimezone($tz)->format('Y-m-d\TH:i:s');
     }
 
     /**
