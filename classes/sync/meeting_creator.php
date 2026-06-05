@@ -84,6 +84,7 @@ class meeting_creator {
         }
 
         $this->sync_occurrences($instance);
+        $this->recreate_calendar_event($instance);
 
         // Re-push Outlook invites to enrolled learners using the updated occurrence schedule.
         $handler = new enrolment_handler();
@@ -174,6 +175,64 @@ class meeting_creator {
         }
 
         $DB->delete_records_select('msteamsecp_enrollee_events', "occurrenceid $in_sql", $in_params);
+    }
+
+    /**
+     * Delete and recreate the service account calendar event with the current
+     * schedule. The Graph API returns 405 when PATCHing startDateTime/endDateTime
+     * on a meeting-linked calendar event, so delete+recreate is the only way to
+     * move the event in Outlook/Teams.
+     *
+     * Updates msteamsecp.graph_event_id and all occurrence rows to the new ID so
+     * that sync_coorganisers() and post_event_processor use the correct event.
+     *
+     * @param object $instance  msteamsecp record (mutated: graph_event_id updated)
+     */
+    private function recreate_calendar_event(object $instance): void {
+        global $DB;
+
+        if (!empty($instance->graph_event_id)) {
+            try {
+                $this->graph->delete_event($instance->graph_event_id);
+            } catch (\Throwable $e) {
+                debugging('msteamsecp: could not delete old calendar event: ' . $e->getMessage(), \DEBUG_DEVELOPER);
+            }
+        }
+
+        $tz                 = \core_date::get_server_timezone();
+        $course             = $DB->get_record('course', ['id' => $instance->course], '*', \MUST_EXIST);
+        $coorganiser_emails = $this->get_coorganiser_emails($instance->id);
+
+        $event_params = [
+            'subject'   => $instance->name,
+            'body'      => $this->build_event_body($course->fullname, $instance->join_url ?? ''),
+            'start'     => ['dateTime' => $this->to_local_datetime($instance->starttime), 'timeZone' => $tz],
+            'end'       => ['dateTime' => $this->to_local_datetime($instance->endtime),   'timeZone' => $tz],
+            'attendees' => $this->build_calendar_attendees($coorganiser_emails),
+        ];
+
+        if ($instance->is_recurring) {
+            $event_params['recurrence'] = $this->build_recurrence_pattern($instance);
+        }
+
+        try {
+            $new_event    = $this->graph->create_event($event_params);
+            $new_event_id = $new_event['id'] ?? '';
+
+            $DB->update_record('msteamsecp', (object) [
+                'id'             => $instance->id,
+                'graph_event_id' => $new_event_id,
+                'timemodified'   => time(),
+            ]);
+            $DB->execute(
+                "UPDATE {msteamsecp_occurrences} SET graph_event_id = :evtid WHERE instanceid = :id",
+                ['evtid' => $new_event_id, 'id' => $instance->id]
+            );
+
+            $instance->graph_event_id = $new_event_id;
+        } catch (\Throwable $e) {
+            debugging('msteamsecp: could not recreate calendar event: ' . $e->getMessage(), \DEBUG_DEVELOPER);
+        }
     }
 
     /**
