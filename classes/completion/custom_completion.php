@@ -97,6 +97,29 @@ class custom_completion extends \core_completion\activity_custom_completion {
         return ['completion_attendance', 'completion_recording'];
     }
 
+    /**
+     * OR logic: completing either attendance or recording is sufficient.
+     *
+     * Moodle's default implementation requires ALL enabled rules (AND logic),
+     * which prevents live-attendance credit from granting completion when
+     * recording completion is also enabled on the same activity. Since the two
+     * rules represent alternative paths to the same outcome — attending live vs.
+     * watching the recording later — either one should be enough.
+     *
+     * @return int  COMPLETION_COMPLETE or COMPLETION_INCOMPLETE
+     */
+    public function get_overall_completion_state(): int {
+        foreach (static::get_defined_custom_rules() as $rule) {
+            if (!($this->cm->customdata['customcompletionrules'][$rule] ?? false)) {
+                continue;
+            }
+            if ($this->get_state($rule) === COMPLETION_COMPLETE) {
+                return COMPLETION_COMPLETE;
+            }
+        }
+        return COMPLETION_INCOMPLETE;
+    }
+
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
