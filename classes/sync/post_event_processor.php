@@ -143,20 +143,10 @@ class post_event_processor {
             $report_id
         );
 
-        // Use actual meeting duration from the report if available.
-        // This handles meetings that run long or end early — fairer than
-        // using the scheduled duration as the denominator.
-        $actual_start = !empty($full_report['meetingStartDateTime'])
-            ? strtotime($full_report['meetingStartDateTime']) : null;
-        $actual_end   = !empty($full_report['meetingEndDateTime'])
-            ? strtotime($full_report['meetingEndDateTime']) : null;
-
-        if ($actual_start && $actual_end && $actual_end > $actual_start) {
-            $meeting_duration = $actual_end - $actual_start;
-        } else {
-            // Fall back to scheduled duration if report timestamps aren't available.
-            $meeting_duration = $occ->endtime - $occ->starttime;
-        }
+        // Always use scheduled duration as the denominator so that early
+        // joiners or late stayers don't dilute the percentage for attendees
+        // who were present for the entire scheduled session.
+        $meeting_duration = $occ->endtime - $occ->starttime;
 
         foreach ($full_report['attendanceRecords'] ?? [] as $record) {
             $email = $record['emailAddress'] ?? '';
@@ -543,7 +533,7 @@ class post_event_processor {
      * @param int $courseid
      * @param int $instanceid  msteamsecp instance ID
      */
-    private function grant_completion(int $userid, int $courseid, int $instanceid): void {
+    public function grant_completion(int $userid, int $courseid, int $instanceid): void {
         $cm = get_coursemodule_from_instance('msteamsecp', $instanceid, $courseid);
         if (!$cm) {
             return;

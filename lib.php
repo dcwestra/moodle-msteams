@@ -135,6 +135,11 @@ function msteamsecp_update_instance(stdClass $data, mod_msteamsecp_mod_form $mfo
         msteamsecp_sync_calendar_events($instance, (int) $data->coursemodule);
     }
 
+    // Recalculate attendance credit if the threshold changed.
+    if (!empty($data->completion_attendance)) {
+        msteamsecp_recalculate_attendance_credit($data->id, (int) ($data->completion_attendance_pct ?? 0));
+    }
+
     return true;
 }
 
@@ -305,6 +310,59 @@ function msteamsecp_view(stdClass $instance, stdClass $course, stdClass $cm, con
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Recalculate attendance credit for all ended occurrences after a threshold change.
+ *
+ * Reads the stored attendance_pct values (already in the DB) and recalculates
+ * credit_granted against the new threshold. Grants Moodle completion for any
+ * user who now qualifies but didn't before. Does not revoke credit from users
+ * who previously qualified under the old threshold.
+ *
+ * Note: if the stored attendance_pct values are themselves wrong (e.g. calculated
+ * against actual rather than scheduled duration due to the pre-1.6.0 bug), reset
+ * attendance_fetched = 0 on the occurrence to force a full reprocess.
+ *
+ * @param int $instanceid
+ * @param int $new_threshold  New completion_attendance_pct value
+ */
+function msteamsecp_recalculate_attendance_credit(int $instanceid, int $new_threshold): void {
+    global $DB;
+
+    require_once($GLOBALS['CFG']->libdir . '/completionlib.php');
+
+    $instance = $DB->get_record('msteamsecp', ['id' => $instanceid]);
+    if (!$instance) {
+        return;
+    }
+
+    $sql = "SELECT att.*, occ.course
+              FROM {msteamsecp_attendance} att
+              JOIN {msteamsecp_occurrences} occ ON occ.id = att.occurrenceid
+             WHERE att.instanceid = :instanceid
+               AND occ.status = 'ended'
+               AND att.credit_granted = 0";
+
+    $records = $DB->get_records_sql($sql, ['instanceid' => $instanceid]);
+
+    if (empty($records)) {
+        return;
+    }
+
+    $processor = new \mod_msteamsecp\sync\post_event_processor();
+
+    foreach ($records as $att) {
+        if ($att->attendance_pct >= $new_threshold) {
+            $DB->update_record('msteamsecp_attendance', (object) [
+                'id'           => $att->id,
+                'credit_granted' => 1,
+                'credit_method'  => 'live',
+                'timemodified'   => time(),
+            ]);
+            $processor->grant_completion($att->userid, $att->course, $instanceid);
+        }
+    }
+}
 
 /**
  * Sync Moodle internal calendar events for all occurrences of a meeting instance.

@@ -9,7 +9,9 @@
  *
  * Each player instance is independent — multiple players on the same page
  * (recurring append mode) each have their own threshold tracking and
- * completion indicator. Scrubbing forward is ignored via high-water mark.
+ * completion indicator. Scrubbing forward past the high-water mark is
+ * blocked: the seeking event resets position if the user tries to jump
+ * ahead of what they have actually watched.
  */
 define(['core/ajax', 'core/notification'], function(Ajax) {
 
@@ -22,23 +24,30 @@ define(['core/ajax', 'core/notification'], function(Ajax) {
         }
 
         var completionAttempted = false;
-        var maxPercentWatched   = 0;
+        var maxTimeWatched      = 0; // seconds — only advances during real playback
+
+        // Block seeking forward past the high-water mark.
+        video.addEventListener('seeking', function() {
+            if (video.currentTime > maxTimeWatched + 1) {
+                video.currentTime = maxTimeWatched;
+            }
+        });
 
         video.addEventListener('timeupdate', function() {
             if (!video.duration || video.duration === 0) {
                 return;
             }
 
-            var currentPercent = (video.currentTime / video.duration) * 100;
-
-            // High-water mark — scrubbing forward doesn't count.
-            if (currentPercent > maxPercentWatched) {
-                maxPercentWatched = currentPercent;
+            // Advance high-water mark only during actual playback, not while seeking.
+            if (!video.seeking && video.currentTime > maxTimeWatched) {
+                maxTimeWatched = video.currentTime;
             }
 
-            if (!completionAttempted && maxPercentWatched >= threshold) {
+            var maxPct = (maxTimeWatched / video.duration) * 100;
+
+            if (!completionAttempted && maxPct >= threshold) {
                 completionAttempted = true;
-                markComplete(cmId, occurrenceId, maxPercentWatched);
+                markComplete(cmId, occurrenceId, maxPct);
             }
         });
 
