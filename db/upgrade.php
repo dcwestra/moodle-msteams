@@ -222,5 +222,18 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026060200, 'msteamsecp');
     }
 
+    if ($oldversion < 2026060800) {
+        // v1.6.0 / v1.6.1 — No schema changes. Meeting edit now rebuilds
+        // occurrences (fixing errant LMS calendar events and DST-shifted times),
+        // retracts and resends learner Outlook invites, and recreates the service
+        // account calendar event (workaround for Graph 405 on startDateTime PATCH).
+        // Attendance denominator changed to scheduled duration so early joiners
+        // and late stayers don't dilute the percentage. Threshold recalculation
+        // runs on save. Custom completion switched to OR logic so live attendance
+        // or recording watch either one grants completion. Video scrubbing
+        // prevention fixed in the recording player.
+        upgrade_mod_savepoint(true, 2026060800, 'msteamsecp');
+    }
+
     return true;
 }
