@@ -327,9 +327,9 @@ function msteamsecp_view(stdClass $instance, stdClass $course, stdClass $cm, con
  * @param int $new_threshold  New completion_attendance_pct value
  */
 function msteamsecp_recalculate_attendance_credit(int $instanceid, int $new_threshold): void {
-    global $DB;
+    global $CFG, $DB;
 
-    require_once($GLOBALS['CFG']->libdir . '/completionlib.php');
+    require_once($CFG->libdir . '/completionlib.php');
 
     $instance = $DB->get_record('msteamsecp', ['id' => $instanceid]);
     if (!$instance) {

@@ -192,7 +192,7 @@ class enrolment_handler {
         global $DB;
 
         $user = $DB->get_record('user', ['id' => $userid]);
-        if (!$user) {
+        if (!$user || empty($user->email)) {
             return;
         }
 
@@ -244,7 +244,7 @@ class enrolment_handler {
         global $DB;
 
         $user = $DB->get_record('user', ['id' => $userid]);
-        if (!$user) {
+        if (!$user || empty($user->email)) {
             return;
         }
 
