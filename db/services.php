@@ -10,6 +10,15 @@
 defined('MOODLE_INTERNAL') || die();
 
 $functions = [
+    'mod_msteamsecp_save_watch_progress' => [
+        'classname'     => 'mod_msteamsecp\external\save_watch_progress',
+        'methodname'    => 'execute',
+        'description'   => 'Persist a learner\'s unique recording watch time (merged server-side across sessions) and grant completion credit when the threshold is reached.',
+        'type'          => 'write',
+        'ajax'          => true,
+        'loginrequired' => true,
+        'capabilities'  => 'mod/msteamsecp:view',
+    ],
     'mod_msteamsecp_mark_recording_complete' => [
         'classname'     => 'mod_msteamsecp\external\mark_recording_complete',
         'methodname'    => 'execute',

@@ -62,6 +62,8 @@ $string['completion_attendance_pct'] = 'Minimum attendance % required (0 = any j
 $string['completion_attendance_pct_help'] = 'Set to 0 to grant credit for joining at any point. Set to e.g. 75 to require the user attend at least 75% of the meeting duration.';
 $string['completion_recording']      = 'Allow recording watch to grant completion credit';
 $string['completion_recording_help'] = 'When enabled, watching the recording activity created in the Session Recordings section will count toward course completion.';
+$string['completion_recording_pct']      = 'Minimum watch % required (blank = site default)';
+$string['completion_recording_pct_help'] = 'Percentage of the recording a learner must watch to receive completion credit. Watch time is counted in unique seconds — rewatching a section does not count twice, and skipping over a section does not count the skipped part. Leave blank (or 0) to use the site-wide default. For recordings that contain meeting breaks or dead time, set this lower so learners can skip those sections and still earn credit.';
 
 // View.
 $string['occurrences']          = 'Meeting sessions';
@@ -78,6 +80,10 @@ $string['watch_recording']      = 'Watch recording';
 $string['watch']                = 'Watch';
 $string['upload']               = 'Upload';
 $string['upload_recording']     = 'Upload recording';
+$string['upload_recording_for'] = 'Upload recording — {$a}';
+$string['recording_file']       = 'Recording file';
+$string['recording_upload_success'] = 'Recording uploaded successfully. It is now available to learners.';
+$string['recording_upload_failed']  = 'No file was received — please try the upload again.';
 $string['starts_in']            = 'Starts in {$a}';
 $string['no_occurrences']       = 'No sessions found for this meeting.';
 $string['nomeetings']           = 'There are no Teams meetings in this course.';
@@ -146,8 +152,14 @@ $string['privacy:metadata:enrollee_events:timepushed']    = 'When the calendar e
 $string['privacy:metadata:graph']                         = 'This plugin sends data to Microsoft Graph API to create calendar events in users\' Outlook calendars.';
 $string['privacy:metadata:graph:email']                   = 'The user\'s email address is used to identify their Microsoft 365 account.';
 $string['privacy:metadata:graph:calendar']                = 'Meeting calendar events are created in the user\'s Outlook/Teams calendar.';
+$string['privacy:metadata:watch_progress']                 = 'Recording watch progress for Teams meeting sessions.';
+$string['privacy:metadata:watch_progress:userid']          = 'The ID of the user watching the recording.';
+$string['privacy:metadata:watch_progress:watched_seconds'] = 'Total unique seconds of the recording the user has watched.';
+$string['privacy:metadata:watch_progress:watched_ranges']  = 'The sections of the recording the user has watched.';
+$string['privacy:metadata:watch_progress:last_position']   = 'The playback position where the user last stopped watching.';
 $string['privacy:export:attendance']                      = 'Attendance Records';
 $string['privacy:export:calendar_events']                 = 'Calendar Events';
+$string['privacy:export:watch_progress']                  = 'Recording Watch Progress';
 
 // Co-organisers.
 $string['coorganisers']      = 'Co-organisers';
@@ -183,10 +195,12 @@ $string['msteamsecp:viewattendance']  = 'View meeting attendance reports';
 
 // Recording player strings.
 $string['session_recording']                      = 'Session Recording';
-$string['recording_threshold_notice']             = 'You must watch at least {$a}% of this recording to receive course completion credit.';
-$string['recording_completion_granted']           = '✅ Completion credited — thank you for watching the recording.';
+$string['recording_threshold_notice']             = 'You must watch at least {$a}% of this recording to receive course completion credit. You may skip around freely — credit is based on your total time watched.';
+$string['recording_review_notice']                = 'You have already received credit for this activity — watch as much or as little as you like.';
+$string['recording_completion_granted']           = '✅ Completion credited — thank you for watching.';
+$string['recording_progress']                     = 'You have watched {$a}% of this recording so far. Your progress is saved automatically, so you can leave and continue later.';
 $string['settings_recording_completion_threshold']      = 'Recording completion threshold (%)';
-$string['settings_recording_completion_threshold_desc'] = 'Percentage of the recording a learner must watch to receive course completion credit. Default is 80.';
+$string['settings_recording_completion_threshold_desc'] = 'Percentage of the recording a learner must watch to receive course completion credit. Default is 80. Can be overridden per activity via "Minimum watch % required" in the activity\'s completion settings.';
 $string['next_session']       = 'Next Session';
 $string['all_sessions_ended'] = 'All sessions have ended.';
 $string['join_opens_in']      = 'Join link opens in {$a}';
@@ -205,3 +219,4 @@ $string['attendance_requirement_help'] = 'Controls what learners must do to comp
 $string['completion_attendance_desc']     = 'Attend a session';
 $string['completion_attendance_pct_desc'] = 'Attend at least {$a}% of a session';
 $string['completion_recording_desc']      = 'Watch the session recording';
+$string['completion_recording_pct_desc']  = 'Watch at least {$a}% of the session recording';

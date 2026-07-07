@@ -166,6 +166,7 @@ function msteamsecp_delete_instance(int $id): bool {
     foreach ($occurrences as $occ) {
         $DB->delete_records('msteamsecp_attendance',      ['occurrenceid' => $occ->id]);
         $DB->delete_records('msteamsecp_enrollee_events', ['occurrenceid' => $occ->id]);
+        $DB->delete_records('msteamsecp_watch_progress',  ['occurrenceid' => $occ->id]);
     }
     $DB->delete_records('msteamsecp_occurrences',   ['instanceid' => $id]);
     $DB->delete_records('msteamsecp_coorganisers',  ['instanceid' => $id]);
@@ -336,7 +337,7 @@ function msteamsecp_recalculate_attendance_credit(int $instanceid, int $new_thre
         return;
     }
 
-    $sql = "SELECT att.*, occ.course
+    $sql = "SELECT att.*
               FROM {msteamsecp_attendance} att
               JOIN {msteamsecp_occurrences} occ ON occ.id = att.occurrenceid
              WHERE att.instanceid = :instanceid
@@ -359,9 +360,29 @@ function msteamsecp_recalculate_attendance_credit(int $instanceid, int $new_thre
                 'credit_method'  => 'live',
                 'timemodified'   => time(),
             ]);
-            $processor->grant_completion($att->userid, $att->course, $instanceid);
+            $processor->grant_completion($att->userid, $instance->course, $instanceid);
         }
     }
+}
+
+/**
+ * Effective recording watch threshold (%) for an instance.
+ *
+ * The per-activity completion_recording_pct (1–100) overrides the site-wide
+ * recording_completion_threshold setting. Blank/0 means use the site default.
+ * Activities with recordings containing meeting breaks or dead time can set
+ * a lower per-activity value so learners can skip those sections and still
+ * accumulate enough watch time for credit.
+ *
+ * @param stdClass $instance  msteamsecp record
+ * @return int  Threshold percentage (1–100)
+ */
+function msteamsecp_recording_threshold(stdClass $instance): int {
+    $pct = (int) ($instance->completion_recording_pct ?? 0);
+    if ($pct > 0 && $pct <= 100) {
+        return $pct;
+    }
+    return (int) (get_config('mod_msteamsecp', 'recording_completion_threshold') ?: 80);
 }
 
 /**
@@ -465,13 +486,19 @@ function msteamsecp_supports(string $feature): ?bool {
 function msteamsecp_get_coursemodule_info(stdClass $coursemodule) {
     global $DB;
 
-    // Check once per request whether completion columns exist (added in v1.4.5).
+    // Check once per request whether completion columns exist (added in v1.4.5;
+    // completion_recording_pct added in v1.6.2).
     static $has_completion_cols = null;
+    static $has_recording_pct   = null;
     if ($has_completion_cols === null) {
         $dbman = $DB->get_manager();
         $has_completion_cols = $dbman->field_exists(
             new xmldb_table('msteamsecp'),
             new xmldb_field('completion_attendance')
+        );
+        $has_recording_pct = $dbman->field_exists(
+            new xmldb_table('msteamsecp'),
+            new xmldb_field('completion_recording_pct')
         );
     }
 
@@ -479,6 +506,9 @@ function msteamsecp_get_coursemodule_info(stdClass $coursemodule) {
     $fields = 'id, name, intro, introformat';
     if ($has_completion_cols) {
         $fields .= ', completion_attendance, completion_attendance_pct, completion_recording';
+    }
+    if ($has_recording_pct) {
+        $fields .= ', completion_recording_pct';
     }
 
     $instance = $DB->get_record('msteamsecp', ['id' => $coursemodule->instance], $fields);
@@ -500,8 +530,10 @@ function msteamsecp_get_coursemodule_info(stdClass $coursemodule) {
     if ($coursemodule->completion == COMPLETION_TRACKING_AUTOMATIC) {
         $result->customdata['customcompletionrules']['completion_attendance'] = $instance->completion_attendance ?? 0;
         $result->customdata['customcompletionrules']['completion_recording']  = $instance->completion_recording ?? 0;
-        // Store pct separately — used by custom_completion.php and rule descriptions.
+        // Store pcts separately — used by custom_completion.php and rule descriptions.
         $result->customdata['completion_attendance_pct'] = $instance->completion_attendance_pct ?? 0;
+        // Effective (per-activity or site default) recording watch threshold.
+        $result->customdata['completion_recording_pct']  = msteamsecp_recording_threshold($instance);
     }
 
     return $result;

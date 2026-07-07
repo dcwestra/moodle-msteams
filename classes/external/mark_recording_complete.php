@@ -75,8 +75,12 @@ class mark_recording_complete extends external_api {
             return ['success' => false, 'message' => 'Recording not available for this occurrence.'];
         }
 
-        // Get the configured threshold (default 80%).
-        $threshold = (float) (get_config('mod_msteamsecp', 'recording_completion_threshold') ?: 80);
+        require_once($CFG->dirroot . '/mod/msteamsecp/lib.php');
+        $instance = $DB->get_record('msteamsecp', ['id' => $cm->instance], '*', \MUST_EXIST);
+
+        // Effective threshold — per-activity completion_recording_pct, or the
+        // site-wide recording_completion_threshold when not set (default 80%).
+        $threshold = (float) msteamsecp_recording_threshold($instance);
 
         if ($percent_watched < $threshold) {
             return [
@@ -88,7 +92,6 @@ class mark_recording_complete extends external_api {
         // Grant completion on the msteamsecp activity — respecting attendance_requirement.
         require_once($CFG->libdir . '/completionlib.php');
         $course     = $DB->get_record('course', ['id' => $cm->course], '*', \MUST_EXIST);
-        $instance   = $DB->get_record('msteamsecp', ['id' => $cm->instance], '*', \MUST_EXIST);
         $completion = new \completion_info($course);
 
         if (!$completion->is_enabled($cm)) {

@@ -7,10 +7,12 @@
  * Data stored per user:
  *   - msteamsecp_attendance   : join/leave times, duration, attendance %, credit granted
  *   - msteamsecp_enrollee_events : Graph calendar event IDs pushed to user's calendar
+ *   - msteamsecp_watch_progress  : recording watch time, watched ranges, last position
  *
  * On deletion:
  *   - Attendance records are anonymised (userid set to 0) — stats are preserved
  *   - Enrollee event records are hard deleted (they are purely operational/personal)
+ *   - Watch progress records are hard deleted (purely operational/personal)
  *
  * @package    mod_msteamsecp
  * @copyright  2026 Eyecare Partners
@@ -61,6 +63,13 @@ class provider implements
             'timepushed'     => 'privacy:metadata:enrollee_events:timepushed',
         ], 'privacy:metadata:enrollee_events');
 
+        $collection->add_database_table('msteamsecp_watch_progress', [
+            'userid'          => 'privacy:metadata:watch_progress:userid',
+            'watched_seconds' => 'privacy:metadata:watch_progress:watched_seconds',
+            'watched_ranges'  => 'privacy:metadata:watch_progress:watched_ranges',
+            'last_position'   => 'privacy:metadata:watch_progress:last_position',
+        ], 'privacy:metadata:watch_progress');
+
         $collection->add_external_location_link('microsoft_graph', [
             'email'    => 'privacy:metadata:graph:email',
             'calendar' => 'privacy:metadata:graph:calendar',
@@ -103,6 +112,18 @@ class provider implements
             'userid'   => $userid,
         ]);
 
+        // Recording watch progress.
+        $sql = "SELECT ctx.id
+                  FROM {context} ctx
+                  JOIN {course_modules} cm ON cm.id = ctx.instanceid AND ctx.contextlevel = :ctxlevel
+                  JOIN {msteamsecp} m ON m.id = cm.instance
+                  JOIN {msteamsecp_watch_progress} wp ON wp.instanceid = m.id AND wp.userid = :userid";
+
+        $contextlist->add_from_sql($sql, [
+            'ctxlevel' => CONTEXT_MODULE,
+            'userid'   => $userid,
+        ]);
+
         return $contextlist;
     }
 
@@ -130,6 +151,15 @@ class provider implements
         $sql = "SELECT ee.userid
                   FROM {msteamsecp_enrollee_events} ee
                   JOIN {msteamsecp} m ON m.id = ee.instanceid
+                  JOIN {course_modules} cm ON cm.instance = m.id
+                  JOIN {context} ctx ON ctx.instanceid = cm.id AND ctx.contextlevel = :ctxlevel
+                 WHERE ctx.id = :ctxid";
+
+        $userlist->add_from_sql('userid', $sql, $params);
+
+        $sql = "SELECT wp.userid
+                  FROM {msteamsecp_watch_progress} wp
+                  JOIN {msteamsecp} m ON m.id = wp.instanceid
                   JOIN {course_modules} cm ON cm.instance = m.id
                   JOIN {context} ctx ON ctx.instanceid = cm.id AND ctx.contextlevel = :ctxlevel
                  WHERE ctx.id = :ctxid";
@@ -216,6 +246,36 @@ class provider implements
                     (object) ['records' => array_values($export_events)]
                 );
             }
+
+            // Export recording watch progress.
+            $progress = $DB->get_records_sql(
+                "SELECT wp.*, occ.starttime AS occurrence_start
+                   FROM {msteamsecp_watch_progress} wp
+                   JOIN {msteamsecp_occurrences} occ ON occ.id = wp.occurrenceid
+                  WHERE wp.instanceid = :instanceid AND wp.userid = :userid
+               ORDER BY occ.starttime ASC",
+                ['instanceid' => $cm->instance, 'userid' => $userid]
+            );
+
+            if (!empty($progress)) {
+                $export_progress = array_map(function($rec) {
+                    $pct = $rec->duration > 0
+                        ? min(100, round(($rec->watched_seconds / $rec->duration) * 100, 1))
+                        : 0;
+                    return [
+                        'occurrence_date'    => transform::datetime($rec->occurrence_start),
+                        'watched_seconds'    => $rec->watched_seconds,
+                        'watched_pct'        => $pct,
+                        'last_position_secs' => $rec->last_position,
+                        'last_updated'       => transform::datetime($rec->timemodified),
+                    ];
+                }, $progress);
+
+                writer::with_context($context)->export_data(
+                    [get_string('privacy:export:watch_progress', 'mod_msteamsecp')],
+                    (object) ['records' => array_values($export_progress)]
+                );
+            }
         }
     }
 
@@ -246,6 +306,9 @@ class provider implements
 
         // Hard delete enrollee calendar event records.
         $DB->delete_records('msteamsecp_enrollee_events', ['instanceid' => $cm->instance]);
+
+        // Hard delete watch progress records.
+        $DB->delete_records('msteamsecp_watch_progress', ['instanceid' => $cm->instance]);
     }
 
     /**
@@ -286,6 +349,13 @@ class provider implements
               WHERE instanceid = :instanceid AND userid $in_sql",
             $params
         );
+
+        // Hard delete watch progress.
+        $DB->execute(
+            "DELETE FROM {msteamsecp_watch_progress}
+              WHERE instanceid = :instanceid AND userid $in_sql",
+            $params
+        );
     }
 
     /**
@@ -316,6 +386,12 @@ class provider implements
 
             // Hard delete enrollee events.
             $DB->delete_records('msteamsecp_enrollee_events', [
+                'instanceid' => $cm->instance,
+                'userid'     => $userid,
+            ]);
+
+            // Hard delete watch progress.
+            $DB->delete_records('msteamsecp_watch_progress', [
                 'instanceid' => $cm->instance,
                 'userid'     => $userid,
             ]);

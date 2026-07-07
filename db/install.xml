@@ -20,6 +20,7 @@
         <FIELD NAME="completion_attendance"     TYPE="int"    LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="completion_attendance_pct" TYPE="int"    LENGTH="3"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="completion_recording"      TYPE="int"    LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="completion_recording_pct"  TYPE="int"    LENGTH="3"  NOTNULL="false"/>
         <FIELD NAME="is_recurring"              TYPE="int"    LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="recurrence_type"           TYPE="char"   LENGTH="10" NOTNULL="false"/>
         <FIELD NAME="recurrence_interval"       TYPE="int"    LENGTH="3"  NOTNULL="false" DEFAULT="1"/>
@@ -116,6 +117,29 @@
       </INDEXES>
     </TABLE>
 
+
+    <TABLE NAME="msteamsecp_watch_progress" COMMENT="Per-user unique watch time on session recordings">
+      <FIELDS>
+        <FIELD NAME="id"              TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="instanceid"      TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="occurrenceid"    TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid"          TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="duration"        TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="watched_seconds" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="watched_ranges"  TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="last_position"   TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timecreated"     TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified"    TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary"       TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_occurrence" TYPE="foreign" FIELDS="occurrenceid" REFTABLE="msteamsecp_occurrences" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="idx_occurrence_user" UNIQUE="true"  FIELDS="occurrenceid, userid"/>
+        <INDEX NAME="idx_instance_user"   UNIQUE="false" FIELDS="instanceid, userid"/>
+      </INDEXES>
+    </TABLE>
 
     <!-- Co-organisers entered as email addresses per meeting instance -->
     <TABLE NAME="msteamsecp_coorganisers" COMMENT="Email-based co-organisers per meeting">

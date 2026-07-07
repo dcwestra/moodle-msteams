@@ -235,5 +235,62 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026060800, 'msteamsecp');
     }
 
+    if ($oldversion < 2026070500) {
+        // v1.7.0 part 1 — No schema changes. Fixed dml_read_exception in
+        // msteamsecp_recalculate_attendance_credit() (selected occ.course from
+        // a table with no course column, breaking every activity re-save with
+        // attendance completion enabled). Added the missing upload_recording.php
+        // page for manual recording mode.
+        upgrade_mod_savepoint(true, 2026070500, 'msteamsecp');
+    }
+
+    if ($oldversion < 2026070600) {
+        // v1.7.0 part 2 — Recording player rework: seeking is never blocked;
+        // completion credit is earned by accumulating unique watch time (each
+        // second counts once; seeked-over gaps don't count). New per-activity
+        // completion_recording_pct overrides the site-wide
+        // recording_completion_threshold (blank/0 = site default) so recordings
+        // containing meeting breaks or dead time can use a lower bar, letting
+        // learners skip those sections and still earn credit.
+        $table = new xmldb_table('msteamsecp');
+        $field = new xmldb_field('completion_recording_pct', XMLDB_TYPE_INTEGER, '3',
+            null, null, null, null, 'completion_recording');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        upgrade_mod_savepoint(true, 2026070600, 'msteamsecp');
+    }
+
+    if ($oldversion < 2026070700) {
+        // v1.7.0 part 3 — Server-side persistent watch progress. Watched ranges
+        // are saved every 30 seconds of playback (and on pause/tab-hide), merged
+        // server-side, and re-seeded into the player on the next visit, so
+        // learners can watch long recordings across multiple sittings. Playback
+        // resumes at the last saved position. Credit is granted server-side the
+        // moment accumulated unique watch time reaches the threshold.
+        $table = new xmldb_table('msteamsecp_watch_progress');
+        $table->add_field('id',              XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $table->add_field('instanceid',      XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('occurrenceid',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('userid',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('duration',        XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('watched_seconds', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('watched_ranges',  XMLDB_TYPE_TEXT,    null, null, null, null, null);
+        $table->add_field('last_position',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timecreated',     XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timemodified',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary',       XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_key('fk_occurrence', XMLDB_KEY_FOREIGN, ['occurrenceid'], 'msteamsecp_occurrences', ['id']);
+        $table->add_index('idx_occurrence_user', XMLDB_INDEX_UNIQUE,    ['occurrenceid', 'userid']);
+        $table->add_index('idx_instance_user',   XMLDB_INDEX_NOTUNIQUE, ['instanceid', 'userid']);
+
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        upgrade_mod_savepoint(true, 2026070700, 'msteamsecp');
+    }
+
     return true;
 }

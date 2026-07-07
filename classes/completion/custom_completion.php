@@ -81,7 +81,10 @@ class custom_completion extends \core_completion\activity_custom_completion {
         }
 
         if (!empty($rules['completion_recording'])) {
-            $descriptions['completion_recording'] = get_string('completion_recording_desc', 'mod_msteamsecp');
+            $rpct = (int) ($this->cm->customdata['completion_recording_pct'] ?? 0);
+            $descriptions['completion_recording'] = $rpct > 0
+                ? get_string('completion_recording_pct_desc', 'mod_msteamsecp', $rpct)
+                : get_string('completion_recording_desc', 'mod_msteamsecp');
         }
 
         return $descriptions;

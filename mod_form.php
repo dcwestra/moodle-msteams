@@ -187,6 +187,15 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
         $mform->addHelpButton('completion_recording',
             'completion_recording', 'mod_msteamsecp');
 
+        // Per-activity watch threshold — blank/0 falls back to the site-wide
+        // recording_completion_threshold setting.
+        $mform->addElement('text', 'completion_recording_pct',
+            get_string('completion_recording_pct', 'mod_msteamsecp'), ['size' => 4]);
+        $mform->setType('completion_recording_pct', PARAM_INT);
+        $mform->addHelpButton('completion_recording_pct',
+            'completion_recording_pct', 'mod_msteamsecp');
+        $mform->hideIf('completion_recording_pct', 'completion_recording', 'eq', 0);
+
         return [
             'completion_attendance',
             'completion_recording',
@@ -286,9 +295,10 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
 
         // If completion is not set to automatic, clear our custom rule values.
         if (empty($data->completion) || $data->completion != COMPLETION_TRACKING_AUTOMATIC) {
-            $data->completion_attendance     = 0;
-            $data->completion_attendance_pct = 0;
-            $data->completion_recording      = 0;
+            $data->completion_attendance      = 0;
+            $data->completion_attendance_pct  = 0;
+            $data->completion_recording       = 0;
+            $data->completion_recording_pct   = 0;
         }
 
         return $data;

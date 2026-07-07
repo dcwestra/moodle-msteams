@@ -42,7 +42,7 @@ Credentials (Client ID and Client Secret) are stored as plaintext in Moodle's co
 | Join button timing | N/A | Available 15 minutes before start only |
 | Activity completion API | Not supported | Full custom_completion class (Moodle 4.2+ standard) |
 | IOMAD compatibility | Not tested | Compatible |
-| Database tables | 1 (7 fields) | 5 (purpose-built schema) |
+| Database tables | 1 (7 fields) | 6 (purpose-built schema) |
 | Backup/restore | Yes | Yes (backup files included, FEATURE_BACKUP_MOODLE2 enabled) |
 | Privacy API (GDPR) | No | Yes |
 
@@ -87,12 +87,14 @@ Controls the completion model for recurring meetings:
 For single (non-recurring) meetings this setting has no effect.
 
 ### Attendance Percentage
-Attendance is calculated from the Graph attendance report using each participant's actual join/leave intervals (`durationInSeconds`). The denominator is the **actual meeting duration** from `meetingStartDateTime` / `meetingEndDateTime` in the report — not the scheduled duration. This correctly handles meetings that run long or end early. Attendance is capped at 100%.
+Attendance is calculated from the Graph attendance report using each participant's actual join/leave intervals (`durationInSeconds`). The denominator is the **scheduled meeting duration** (occurrence end time minus start time) — not the actual run time from the report. Using actual run time penalised on-time attendees when hosts joined early or ran late. Attendance is capped at 100%.
 
 ### Recording Pipeline
 After a meeting ends, the scheduled task checks for a completed recording, downloads it via Graph, stores it in Moodle's file system under the `mod_msteamsecp` component, and renders it as an inline HTML5 video player on the activity page. No separate course activity is created.
 
-Learners who watch at least the configured threshold (default 80%) receive completion credit automatically via an AMD-tracked AJAX call.
+Learners earn completion credit by accumulating **unique watch time**: the player never blocks seeking, and counts each second of the recording once — rewatching a section doesn't double-count, and skipping over a section doesn't count the skipped part. When unique watch time reaches the threshold percentage of the recording's duration, credit is granted automatically. The threshold can be set per activity ("Minimum watch % required" in the completion settings; blank uses the site-wide default of 80%) — set it lower for recordings that contain meeting breaks or dead time so learners can skip those sections and still qualify. Learners who already have credit (live attendance, a previously watched recording, or a manual grant) see a review notice and are not tracked.
+
+**Progress is persistent.** Watched sections are saved to the server every 30 seconds of playback (and on pause or when the tab is hidden), so long recordings can be watched across multiple sittings and devices — progress from different sessions is merged. Playback resumes where the learner left off, and a progress line under the player shows the percentage watched so far.
 
 ### Moodle LMS Calendar
 When an activity is saved, Moodle internal calendar events are created for all upcoming occurrences. These appear on:
@@ -164,7 +166,7 @@ Both rules respect the **attend once / attend all** setting for recurring meetin
 | Service account UPN | Email of the Teams service account |
 | Default lobby bypass | Default lobby bypass setting for new meetings |
 | Default attendance threshold % | Minimum attendance % for live attendance completion credit |
-| Recording completion threshold % | Watch % required for recording completion credit (default: 80) |
+| Recording completion threshold % | Watch % required for recording completion credit (default: 80). Overridable per activity via "Minimum watch % required" |
 
 ---
 

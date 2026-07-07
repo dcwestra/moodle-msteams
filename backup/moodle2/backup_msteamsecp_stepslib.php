@@ -9,6 +9,7 @@
  * Deliberately NOT backed up (personal data):
  *   - msteamsecp_attendance
  *   - msteamsecp_enrollee_events
+ *   - msteamsecp_watch_progress
  *
  * Graph IDs (graph_meeting_id, graph_event_id, join_url) are backed up
  * but cleared on restore — the restored instance starts in draft state
@@ -34,11 +35,13 @@ class backup_msteamsecp_activity_structure_step extends backup_activity_structur
             'graph_meeting_id',
             'graph_event_id',
             'join_url',
+            'lobby_bypass',
             'auto_record',
             'recording_mode',
             'completion_attendance',
             'completion_attendance_pct',
             'completion_recording',
+            'completion_recording_pct',
             'is_recurring',
             'recurrence_type',
             'recurrence_interval',
@@ -46,6 +49,7 @@ class backup_msteamsecp_activity_structure_step extends backup_activity_structur
             'recurrence_count',
             'recurrence_days_of_week',
             'recording_behavior',
+            'attendance_requirement',
             'recording_section_id',
             'starttime',
             'endtime',

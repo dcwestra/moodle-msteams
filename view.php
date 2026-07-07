@@ -54,7 +54,7 @@ $occurrences = $DB->get_records('msteamsecp_occurrences',
 
 if (empty($occurrences)) {
     echo $OUTPUT->notification(get_string('no_occurrences', 'mod_msteamsecp'), 'info');
-    $PAGE->requires->strings_for_js(['recording_completion_granted'], 'mod_msteamsecp');
+    $PAGE->requires->strings_for_js(['recording_completion_granted', 'recording_progress'], 'mod_msteamsecp');
     echo $OUTPUT->footer();
     exit;
 }
@@ -112,7 +112,7 @@ if (!$instance->is_recurring) {
             msteamsecp_render_recording_player(
                 (int) $last_recording->recording_cmid,
                 $last_recording->id,
-                $context, $cm, $PAGE
+                $instance, $context, $cm, $PAGE
             ),
             'collapse',
             ['id' => $toggle_id]
@@ -165,7 +165,7 @@ if (!empty($attendance_records)) {
     }
 }
 
-$PAGE->requires->strings_for_js(['recording_completion_granted'], 'mod_msteamsecp');
+$PAGE->requires->strings_for_js(['recording_completion_granted', 'recording_progress'], 'mod_msteamsecp');
 echo $OUTPUT->footer();
 
 // ── Render helpers ─────────────────────────────────────────────────────────────
@@ -224,7 +224,7 @@ function msteamsecp_render_occurrence(
 
     // Inline recording player (skipped in replace mode where we render it separately).
     if (!$suppress_recording && $occ->recording_ready && !empty($occ->recording_cmid)) {
-        $out .= msteamsecp_render_recording_player((int)$occ->recording_cmid, $occ->id, $context, $cm, $PAGE);
+        $out .= msteamsecp_render_recording_player((int)$occ->recording_cmid, $occ->id, $instance, $context, $cm, $PAGE);
     } elseif ($occ->status === 'ended' && $instance->recording_mode === 'manual') {
         if (has_capability('mod/msteamsecp:uploadrecording', $context)) {
             $out .= ' ' . html_writer::link(
@@ -298,7 +298,7 @@ function msteamsecp_occurrence_row(
             ]
         );
         $recording .= html_writer::div(
-            msteamsecp_render_recording_player((int)$occ->recording_cmid, $occ->id, $context, $cm, $PAGE),
+            msteamsecp_render_recording_player((int)$occ->recording_cmid, $occ->id, $instance, $context, $cm, $PAGE),
             'collapse mt-2',
             ['id' => $toggle_id]
         );
@@ -326,9 +326,46 @@ function msteamsecp_occurrence_row(
     return [$date, $status, $join, $recording, $attendance];
 }
 
+/**
+ * Whether the current user already has completion credit for this recording,
+ * so the player can skip watch-time tracking entirely and show a review
+ * notice instead of the watch-threshold notice.
+ *
+ * True when the activity is already complete for the user (live attendance,
+ * a previously watched recording, or manual completion), when the user has
+ * per-occurrence credit, or when completion tracking is not enabled at all
+ * (no credit to earn, so there is nothing to track).
+ */
+function msteamsecp_user_has_credit(int $occurrenceid, object $cm): bool {
+    global $CFG, $DB, $USER;
+
+    static $activity_complete = null;
+    if ($activity_complete === null) {
+        require_once($CFG->libdir . '/completionlib.php');
+        $completion = new completion_info(get_course($cm->course));
+        if (!$completion->is_enabled($cm)) {
+            $activity_complete = true;
+        } else {
+            $data = $completion->get_data($cm, false, $USER->id);
+            $activity_complete = ((int) $data->completionstate >= COMPLETION_COMPLETE);
+        }
+    }
+    if ($activity_complete) {
+        return true;
+    }
+
+    return $DB->record_exists('msteamsecp_attendance', [
+        'occurrenceid'   => $occurrenceid,
+        'userid'         => $USER->id,
+        'credit_granted' => 1,
+    ]);
+}
+
 function msteamsecp_render_recording_player(
-    int $occid, int $real_occid, context_module $context, object $cm, \moodle_page $PAGE
+    int $occid, int $real_occid, object $instance, context_module $context, object $cm, \moodle_page $PAGE
 ): string {
+    global $DB, $USER;
+
     $fs    = get_file_storage();
     $files = $fs->get_area_files(
         $context->id, 'mod_msteamsecp', 'recording', $occid, 'filename', false
@@ -338,7 +375,23 @@ function msteamsecp_render_recording_player(
         return '';
     }
 
-    $threshold = (int)(get_config('mod_msteamsecp', 'recording_completion_threshold') ?: 80);
+    $threshold  = msteamsecp_recording_threshold($instance);
+    $has_credit = msteamsecp_user_has_credit($real_occid, $cm);
+
+    // Saved watch progress — seeds the player so unique watch time accumulates
+    // across sessions, and playback resumes at the last saved position.
+    $progress       = $DB->get_record('msteamsecp_watch_progress',
+        ['occurrenceid' => $real_occid, 'userid' => $USER->id]);
+    $initial_ranges = [];
+    $resume_pos     = 0;
+    $progress_pct   = 0;
+    if ($progress) {
+        $initial_ranges = json_decode($progress->watched_ranges ?? '[]', true) ?: [];
+        $resume_pos     = (int) $progress->last_position;
+        if ($progress->duration > 0) {
+            $progress_pct = min(100, round(($progress->watched_seconds / $progress->duration) * 100, 1));
+        }
+    }
     $video_url = moodle_url::make_pluginfile_url(
         $context->id, 'mod_msteamsecp', 'recording', $occid, '/', $file->get_filename()
     );
@@ -354,15 +407,24 @@ function msteamsecp_render_recording_player(
         'preload'  => 'metadata',
     ]);
     $out .= html_writer::tag('p',
-        get_string('recording_threshold_notice', 'mod_msteamsecp', $threshold),
+        $has_credit
+            ? get_string('recording_review_notice', 'mod_msteamsecp')
+            : get_string('recording_threshold_notice', 'mod_msteamsecp', $threshold),
         ['class' => 'text-muted small mt-1']
+    );
+    // Live-updated progress line (populated/refreshed by the AMD player).
+    $out .= html_writer::tag('p',
+        (!$has_credit && $progress_pct > 0)
+            ? get_string('recording_progress', 'mod_msteamsecp', $progress_pct)
+            : '',
+        ['id' => 'msteamsecp-progress-' . $real_occid, 'class' => 'text-muted small mt-1']
     );
     $out .= html_writer::div('', '',
         ['id' => 'msteamsecp-completion-indicator-' . $real_occid, 'style' => 'display:none;']
     );
 
     $PAGE->requires->js_call_amd('mod_msteamsecp/recording_player', 'init', [
-        $video_id, $cm->id, $real_occid, $threshold,
+        $video_id, $cm->id, $real_occid, $threshold, $has_credit, $initial_ranges, $resume_pos,
     ]);
 
     return $out;
