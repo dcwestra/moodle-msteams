@@ -292,5 +292,43 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026070700, 'msteamsecp');
     }
 
+    if ($oldversion < 2026073000) {
+        // Recording retrieval gave up on nothing: an occurrence that never
+        // produced a recording — a series meeting skipped for a holiday, say —
+        // was re-queried against Graph every 15 minutes forever. This flag
+        // records that we have stopped looking. Set it back to 0 to make the
+        // cron try again.
+        $table = new xmldb_table('msteamsecp_occurrences');
+        $field = new xmldb_field('recording_abandoned', XMLDB_TYPE_INTEGER, '1', null,
+            XMLDB_NOTNULL, null, '0', 'recording_ready');
+
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        // Live attendance fix. Until now the cron read a single attendance
+        // report per occurrence (end() of an unordered, unpaged list) with no
+        // correlation to the occurrence's date, then latched
+        // attendance_fetched = 1 forever. On recurring meetings that routinely
+        // processed the wrong occurrence's report, and any report Teams
+        // published after the 20-minute grace period was never seen.
+        //
+        // Re-open recently ended occurrences so the corrected matching runs
+        // against them once and grants any credit that was missed. Each gets a
+        // single retry: process_attendance() abandons anything it still can't
+        // resolve more than ATTENDANCE_ABANDON_AFTER past its end time, so this
+        // cannot leave occurrences cycling in the queue.
+        $cutoff = time() - (30 * DAYSECS);
+        $DB->execute(
+            "UPDATE {msteamsecp_occurrences}
+                SET attendance_fetched = 0
+              WHERE status = 'ended'
+                AND endtime > :cutoff",
+            ['cutoff' => $cutoff]
+        );
+
+        upgrade_mod_savepoint(true, 2026073000, 'msteamsecp');
+    }
+
     return true;
 }

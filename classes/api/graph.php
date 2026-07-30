@@ -25,6 +25,9 @@ class graph {
 
     const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
+    /** Safety bound on @odata.nextLink following so a paging loop can't hang cron. */
+    const MAX_PAGES = 20;
+
     // ── App-only token (client credentials) ───────────────────────────────────
     /** @var string|null Cached app-only access token */
     private $token = null;
@@ -289,17 +292,22 @@ class graph {
     /**
      * Fetch all attendance reports for a meeting.
      *
+     * Teams issues a separate report every time a meeting session restarts (the
+     * last participant leaves and someone rejoins), and for a recurring meeting
+     * the onlineMeeting ID is series-level — so this returns reports for every
+     * occurrence held so far. Callers must select the reports belonging to the
+     * occurrence they are processing; see
+     * post_event_processor::reports_for_occurrence().
+     *
      * @param string $meeting_id  Graph onlineMeeting ID
-     * @return array              Array of attendanceReport objects
+     * @return array              Array of attendanceReport objects, all pages
      */
     public function get_attendance_reports(string $meeting_id): array {
-        $response = $this->request(
-            'GET',
+        return $this->request_paged(
             '/users/' . urlencode($this->get_service_account_id())
                 . '/onlineMeetings/' . urlencode($meeting_id)
                 . '/attendanceReports'
         );
-        return $response['value'] ?? [];
     }
 
     /**
@@ -326,17 +334,18 @@ class graph {
     /**
      * List recordings available for a meeting.
      *
+     * As with attendance reports, a recurring meeting's ID is series-level, so
+     * this returns every recording made across the series.
+     *
      * @param string $meeting_id  Graph onlineMeeting ID
-     * @return array              Array of recording objects
+     * @return array              Array of recording objects, all pages
      */
     public function get_recordings(string $meeting_id): array {
-        $response = $this->request(
-            'GET',
+        return $this->request_paged(
             '/users/' . urlencode($this->get_service_account_id())
                 . '/onlineMeetings/' . urlencode($meeting_id)
                 . '/recordings'
         );
-        return $response['value'] ?? [];
     }
 
     /**
@@ -614,6 +623,41 @@ class graph {
      * @param bool       $delegated  If true, use delegated token instead of app-only token
      * @return array                 Decoded JSON response (empty array for 204)
      */
+    /**
+     * GET a collection endpoint, following @odata.nextLink until exhausted.
+     *
+     * Graph pages collection responses. Reading only $response['value'] returns
+     * the first page and silently drops the rest — which for a long-running
+     * recurring meeting means losing older attendance reports and recordings.
+     *
+     * @param string $path  Path relative to GRAPH_BASE
+     * @return array        Concatenated 'value' entries from every page
+     */
+    public function request_paged(string $path): array {
+        $items = [];
+        $pages = 0;
+
+        while ($path !== '' && $pages < self::MAX_PAGES) {
+            $response = $this->request('GET', $path);
+            $pages++;
+
+            foreach ($response['value'] ?? [] as $item) {
+                $items[] = $item;
+            }
+
+            // nextLink is an absolute URL — convert it back to a GRAPH_BASE
+            // relative path. Anything pointing elsewhere (e.g. /beta) is not
+            // followed.
+            $next = (string) ($response['@odata.nextLink'] ?? '');
+            if ($next === '' || strpos($next, self::GRAPH_BASE . '/') !== 0) {
+                break;
+            }
+            $path = substr($next, strlen(self::GRAPH_BASE));
+        }
+
+        return $items;
+    }
+
     public function request(string $method, string $path, ?array $body = null, bool $delegated = false): array {
         global $CFG;
         // Moodle's \curl class lives in lib/filelib.php — not always autoloaded in cron context.

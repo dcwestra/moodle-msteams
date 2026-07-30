@@ -69,6 +69,7 @@ class backup_msteamsecp_activity_structure_step extends backup_activity_structur
             'status',
             'recording_cmid',
             'recording_ready',
+            'recording_abandoned',
             'attendance_fetched',
             'attendance_report_id',
             'timecreated',

@@ -56,6 +56,7 @@
         <FIELD NAME="status"               TYPE="char" LENGTH="10" NOTNULL="true" DEFAULT="upcoming"/>
         <FIELD NAME="recording_cmid"       TYPE="int"  LENGTH="10" NOTNULL="false"/>
         <FIELD NAME="recording_ready"      TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="recording_abandoned"  TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="attendance_fetched"   TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="attendance_report_id" TYPE="char" LENGTH="500" NOTNULL="false"/>
         <FIELD NAME="timecreated"          TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>

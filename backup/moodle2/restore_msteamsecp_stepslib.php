@@ -72,6 +72,7 @@ class restore_msteamsecp_activity_structure_step extends restore_activity_struct
         $data->graph_event_id       = null;
         $data->recording_cmid       = null;
         $data->recording_ready      = 0;
+        $data->recording_abandoned  = 0;
         $data->attendance_fetched   = 0;
         $data->attendance_report_id = null;
 
