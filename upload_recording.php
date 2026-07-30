@@ -77,10 +77,13 @@ if ($form->is_cancelled()) {
             null, \core\output\notification::NOTIFY_ERROR);
     }
 
+    // Clear recording_abandoned too: a manual upload supersedes any earlier
+    // decision to stop looking for an automatic one.
     $DB->update_record('msteamsecp_occurrences', (object) [
-        'id'              => $occ->id,
-        'recording_cmid'  => $occ->id,
-        'recording_ready' => 1,
+        'id'                  => $occ->id,
+        'recording_cmid'      => $occ->id,
+        'recording_ready'     => 1,
+        'recording_abandoned' => 0,
     ]);
 
     redirect($return_url, get_string('recording_upload_success', 'mod_msteamsecp'),

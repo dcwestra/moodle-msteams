@@ -112,15 +112,24 @@ class custom_completion extends \core_completion\activity_custom_completion {
      * @return int  COMPLETION_COMPLETE or COMPLETION_INCOMPLETE
      */
     public function get_overall_completion_state(): int {
+        $active = 0;
+
         foreach (static::get_defined_custom_rules() as $rule) {
             if (!($this->cm->customdata['customcompletionrules'][$rule] ?? false)) {
                 continue;
             }
+            $active++;
             if ($this->get_state($rule) === COMPLETION_COMPLETE) {
                 return COMPLETION_COMPLETE;
             }
         }
-        return COMPLETION_INCOMPLETE;
+
+        // No custom rule is switched on, so this method has nothing to say.
+        // Core's default returns COMPLETE here and lets the standard criteria
+        // (view / grade) decide; returning INCOMPLETE instead would make an
+        // activity set to automatic completion with only "student must view"
+        // ticked impossible to ever complete.
+        return $active === 0 ? COMPLETION_COMPLETE : COMPLETION_INCOMPLETE;
     }
 
     // -------------------------------------------------------------------------
@@ -158,9 +167,11 @@ class custom_completion extends \core_completion\activity_custom_completion {
     private function check_recording(object $instance, int $userid, bool $all_mode): bool {
         global $DB;
 
-        // Recording completion is granted via the JS player callback
-        // (mark_recording_complete external function) which sets credit_method='recording'.
-        // We check for any attendance record with credit granted via recording.
+        // Recording completion is granted server-side by save_watch_progress,
+        // which hands off to the mark_recording_complete class once accumulated
+        // unique watch time crosses the threshold; that sets
+        // credit_method='recording'. We check for any attendance record with
+        // credit granted via recording.
         if ($all_mode) {
             $ended_count = $DB->count_records_select(
                 'msteamsecp_occurrences',

@@ -19,13 +19,11 @@ $functions = [
         'loginrequired' => true,
         'capabilities'  => 'mod/msteamsecp:view',
     ],
-    'mod_msteamsecp_mark_recording_complete' => [
-        'classname'     => 'mod_msteamsecp\external\mark_recording_complete',
-        'methodname'    => 'execute',
-        'description'   => 'Mark a Teams meeting recording as complete for the current user when they reach the configured watch threshold.',
-        'type'          => 'write',
-        'ajax'          => true,
-        'loginrequired' => true,
-        'capabilities'  => 'mod/msteamsecp:view',
-    ],
+    // mark_recording_complete is deliberately NOT registered as a web service.
+    // It trusts the percentage it is handed, so exposing it over AJAX let any
+    // learner with mod/msteamsecp:view POST percent_watched=100 and grant
+    // themselves completion, bypassing the watch-time model entirely. Since
+    // v1.7.0 nothing client-side calls it — save_watch_progress invokes the
+    // class directly in PHP after computing the percentage server-side from
+    // stored watch ranges.
 ];
