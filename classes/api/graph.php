@@ -58,6 +58,9 @@ class graph {
     /** @var string|null Resolved object ID of the service account */
     private $service_account_id = null;
 
+    /** @var array Per-request cache of get_user_by_email() lookups, keyed by lower-cased address */
+    private $user_cache = [];
+
     public function __construct() {
         $this->tenant_id           = get_config('mod_msteamsecp', 'tenant_id');
         $this->client_id           = (string) get_config('mod_msteamsecp', 'client_id');
@@ -103,14 +106,26 @@ class graph {
      * @return array Graph user object (id, mail, displayName)
      */
     public function get_user_by_email(string $email): array {
+        $key = \core_text::strtolower(trim($email));
+
+        // Creating a meeting resolves the same co-organiser addresses more than
+        // once (once for the onlineMeeting attendees, again for the calendar
+        // event, again during sync_coorganisers). Each lookup is a blocking
+        // round-trip inside the form POST, so cache them for the request.
+        if (array_key_exists($key, $this->user_cache)) {
+            return $this->user_cache[$key];
+        }
+
         try {
-            return $this->request('GET',
+            $this->user_cache[$key] = $this->request('GET',
                 '/users/' . urlencode($email) . '?$select=id,mail,displayName,userPrincipalName'
             );
         } catch (\Throwable $e) {
             debugging('msteamsecp: could not look up user ' . $email . ': ' . $e->getMessage(), \DEBUG_DEVELOPER);
-            return [];
+            $this->user_cache[$key] = [];
         }
+
+        return $this->user_cache[$key];
     }
 
     // -------------------------------------------------------------------------

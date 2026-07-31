@@ -93,9 +93,16 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
         foreach ($days as $num => $label) {
             $day_checkboxes[] = $mform->createElement('advcheckbox', 'dow_' . $num, '', $label, ['group' => 1]);
         }
+        // $appendName = false, so the checkboxes submit under their own names
+        // (dow_1..dow_7) and 'days_of_week_group' is only a layout wrapper, not
+        // a real form field. Target the individual element names so the
+        // client-side dependency manager is always resolving a name that
+        // actually exists in the form.
         $mform->addGroup($day_checkboxes, 'days_of_week_group', get_string('recurrence_days', 'mod_msteamsecp'), ' ', false);
-        $mform->hideIf('days_of_week_group', 'is_recurring', 'eq', 0);
-        $mform->hideIf('days_of_week_group', 'recurrence_type', 'neq', 'weekly');
+        foreach (array_keys($days) as $num) {
+            $mform->hideIf('dow_' . $num, 'is_recurring', 'eq', 0);
+            $mform->hideIf('dow_' . $num, 'recurrence_type', 'neq', 'weekly');
+        }
 
         // End condition — always a number of occurrences. The "ends on date"
         // option was removed in 1.7.2: it made the resulting number of sessions
