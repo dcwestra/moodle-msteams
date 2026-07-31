@@ -39,12 +39,9 @@ function msteamsecp_add_instance(stdClass $data, mod_msteamsecp_mod_form $mform 
         $data->recording_behavior     = 'replace';
     } else {
         // 'all' → keep every recording (append); 'any' → replace with latest.
-        $data->recording_behavior = ($data->attendance_requirement ?? 'any') === 'all' ? 'append' : 'replace';
-        if (($data->recurrence_end_type ?? 'date') === 'date') {
-            $data->recurrence_count = null;
-        } else {
-            $data->recurrence_end_date = null;
-        }
+        $data->recording_behavior  = ($data->attendance_requirement ?? 'any') === 'all' ? 'append' : 'replace';
+        $data->recurrence_count    = msteamsecp_recurrence_count($data);
+        $data->recurrence_end_date = null;
     }
 
     $data->id = $DB->insert_record('msteamsecp', $data);
@@ -97,12 +94,9 @@ function msteamsecp_update_instance(stdClass $data, mod_msteamsecp_mod_form $mfo
 
     // Derive recording_behavior from attendance_requirement.
     if (!empty($data->is_recurring)) {
-        $data->recording_behavior = ($data->attendance_requirement ?? 'any') === 'all' ? 'append' : 'replace';
-        if (($data->recurrence_end_type ?? 'date') === 'date') {
-            $data->recurrence_count = null;
-        } else {
-            $data->recurrence_end_date = null;
-        }
+        $data->recording_behavior  = ($data->attendance_requirement ?? 'any') === 'all' ? 'append' : 'replace';
+        $data->recurrence_count    = msteamsecp_recurrence_count($data);
+        $data->recurrence_end_date = null;
     } else {
         $data->attendance_requirement = 'any';
         $data->recording_behavior     = 'replace';
@@ -446,6 +440,21 @@ function msteamsecp_sync_calendar_events(stdClass $instance, int $cmid): void {
 /**
  * Extract individual day checkboxes from form data into a JSON string.
  */
+/**
+ * Resolve the number of occurrences for a recurring meeting.
+ *
+ * Recurring meetings are bounded by an occurrence count only — the "ends on
+ * date" option was removed in 1.7.2 because the resulting number of sessions
+ * wasn't obvious from the form, which invited repeated re-saving to get it
+ * right, and every re-save duplicated occurrence rows.
+ *
+ * @param stdClass $data  Form data or an msteamsecp record
+ * @return int  Clamped to 1..meeting_creator::MAX_OCCURRENCES
+ */
+function msteamsecp_recurrence_count(stdClass $data): int {
+    return \mod_msteamsecp\sync\meeting_creator::clamp_occurrence_count($data->recurrence_count ?? 0);
+}
+
 function msteamsecp_extract_days_of_week(stdClass $data): ?string {
     $days = [];
     for ($i = 1; $i <= 7; $i++) {

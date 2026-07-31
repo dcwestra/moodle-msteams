@@ -97,22 +97,15 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
         $mform->hideIf('days_of_week_group', 'is_recurring', 'eq', 0);
         $mform->hideIf('days_of_week_group', 'recurrence_type', 'neq', 'weekly');
 
-        // End condition.
-        $mform->addElement('select', 'recurrence_end_type', get_string('recurrence_end_type', 'mod_msteamsecp'), [
-            'date'  => get_string('recurrence_end_date',  'mod_msteamsecp'),
-            'count' => get_string('recurrence_end_count', 'mod_msteamsecp'),
-        ]);
-        $mform->hideIf('recurrence_end_type', 'is_recurring', 'eq', 0);
-
-        $mform->addElement('date_selector', 'recurrence_end_date', get_string('recurrence_end_date', 'mod_msteamsecp'));
-        $mform->hideIf('recurrence_end_date', 'is_recurring', 'eq', 0);
-        $mform->hideIf('recurrence_end_date', 'recurrence_end_type', 'neq', 'date');
-
+        // End condition — always a number of occurrences. The "ends on date"
+        // option was removed in 1.7.2: it made the resulting number of sessions
+        // non-obvious, so it invited repeated re-saving to get the count right,
+        // and every re-save used to duplicate occurrence rows.
         $mform->addElement('text', 'recurrence_count', get_string('recurrence_count', 'mod_msteamsecp'), ['size' => 5]);
         $mform->setType('recurrence_count', PARAM_INT);
         $mform->setDefault('recurrence_count', 4);
+        $mform->addHelpButton('recurrence_count', 'recurrence_count', 'mod_msteamsecp');
         $mform->hideIf('recurrence_count', 'is_recurring', 'eq', 0);
-        $mform->hideIf('recurrence_count', 'recurrence_end_type', 'neq', 'count');
 
         // ── Attendance requirement (recurring only) ────────────────────────
         // Controls both how calendar invites are sent and how recordings accumulate.
@@ -223,10 +216,12 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
         }
 
         if (!empty($data['is_recurring'])) {
-            if (!empty($data['recurrence_end_type']) && $data['recurrence_end_type'] === 'count') {
-                if (empty($data['recurrence_count']) || $data['recurrence_count'] < 1) {
-                    $errors['recurrence_count'] = get_string('error_recurrence_count', 'mod_msteamsecp');
-                }
+            $count = (int) ($data['recurrence_count'] ?? 0);
+            if ($count < 1) {
+                $errors['recurrence_count'] = get_string('error_recurrence_count', 'mod_msteamsecp');
+            } else if ($count > \mod_msteamsecp\sync\meeting_creator::MAX_OCCURRENCES) {
+                $errors['recurrence_count'] = get_string('error_recurrence_count_max', 'mod_msteamsecp',
+                    \mod_msteamsecp\sync\meeting_creator::MAX_OCCURRENCES);
             }
         }
 

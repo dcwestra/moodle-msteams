@@ -29,11 +29,30 @@ use mod_msteamsecp\api\graph;
 
 class meeting_creator {
 
+    /**
+     * Upper bound on occurrences in a single recurring series.
+     *
+     * Recurrence is bounded by a count rather than an end date (see 1.7.2), so
+     * this is the only thing standing between a mistyped number and thousands
+     * of occurrence rows plus Graph invites.
+     */
+    const MAX_OCCURRENCES = 200;
+
     /** @var graph */
     private $graph;
 
     public function __construct() {
         $this->graph = new graph();
+    }
+
+    /**
+     * Coerce a stored/submitted occurrence count into the supported range.
+     *
+     * @param mixed $value
+     * @return int  Between 1 and MAX_OCCURRENCES
+     */
+    public static function clamp_occurrence_count($value): int {
+        return max(1, min((int) $value, self::MAX_OCCURRENCES));
     }
 
     // -------------------------------------------------------------------------
@@ -110,18 +129,7 @@ class meeting_creator {
         global $DB;
 
         if ($instance->is_recurring) {
-            $upcoming_ids = $DB->get_fieldset_select(
-                'msteamsecp_occurrences',
-                'id',
-                "instanceid = :id AND status != 'ended'",
-                ['id' => $instance->id]
-            );
-            if ($upcoming_ids) {
-                $this->retract_enrollee_events($upcoming_ids);
-                [$in_sql, $in_params] = $DB->get_in_or_equal($upcoming_ids);
-                $DB->delete_records_select('msteamsecp_occurrences', "id $in_sql", $in_params);
-            }
-            $this->generate_occurrence_rows(
+            $this->reconcile_occurrence_rows(
                 $instance,
                 $instance->graph_meeting_id,
                 $instance->graph_event_id ?? ''
@@ -487,20 +495,82 @@ class meeting_creator {
             'timemodified'     => time(),
         ]);
 
-        $this->generate_occurrence_rows($instance, $meeting['id'], $event['id']);
+        $this->reconcile_occurrence_rows($instance, $meeting['id'], $event['id']);
 
         $instance->graph_meeting_id = $meeting['id'];
         $instance->graph_event_id   = $event['id'];
         $this->sync_coorganisers($instance);
     }
 
-    private function generate_occurrence_rows(object $instance, string $meeting_id, string $event_id): void {
+    /**
+     * Reconcile occurrence rows against the current recurrence definition.
+     *
+     * Idempotent by design: existing rows are matched to expanded start times,
+     * so saving an activity any number of times converges on exactly one row
+     * per scheduled occurrence.
+     *
+     * This replaced a delete-then-reinsert approach that deleted only rows with
+     * status != 'ended' but re-inserted the *entire* expansion, stamping
+     * anything already started as 'ended'. Those freshly inserted 'ended' rows
+     * were invisible to the next save's delete, so every re-save appended
+     * another complete copy of every occurrence that had already begun. Three
+     * saves of a three-session series produced nine rows — appearing as three
+     * separate meetings at the same time, each recurring three times.
+     *
+     * Ended occurrences that have dropped out of the schedule are KEPT: they
+     * carry attendance and completion history. Upcoming ones that have dropped
+     * out are retracted from learners' calendars and removed.
+     *
+     * @param object $instance
+     * @param string $meeting_id
+     * @param string $event_id
+     */
+    private function reconcile_occurrence_rows(object $instance, string $meeting_id, string $event_id): void {
         global $DB;
 
-        $duration    = $instance->endtime - $instance->starttime;
-        $occurrences = $this->expand_recurrence($instance);
+        $duration = $instance->endtime - $instance->starttime;
+        $targets  = $this->expand_recurrence($instance);
+        $now      = time();
 
-        foreach ($occurrences as $index => $starttime) {
+        $existing = $DB->get_records('msteamsecp_occurrences',
+            ['instanceid' => $instance->id], 'starttime ASC, id ASC');
+
+        // Index by start time. Any collision is a duplicate left behind by the
+        // pre-1.7.2 re-save bug; keep whichever row carries learner data.
+        $by_start  = [];
+        $duplicate = [];
+        foreach ($existing as $row) {
+            if (!isset($by_start[$row->starttime])) {
+                $by_start[$row->starttime] = $row;
+                continue;
+            }
+            $incumbent = $by_start[$row->starttime];
+            if (!$this->occurrence_has_data($incumbent->id) && $this->occurrence_has_data($row->id)) {
+                $by_start[$row->starttime] = $row;
+                $duplicate[] = $incumbent;
+            } else {
+                $duplicate[] = $row;
+            }
+        }
+
+        $matched = [];
+
+        foreach ($targets as $index => $starttime) {
+            if (isset($by_start[$starttime])) {
+                // Already scheduled at this time — update in place so attendance
+                // and any invite already pushed for it survive the edit.
+                $row = $by_start[$starttime];
+                $matched[$row->id] = true;
+                $DB->update_record('msteamsecp_occurrences', (object) [
+                    'id'                  => $row->id,
+                    'occurrence_index'    => $index + 1,
+                    'endtime'             => $starttime + $duration,
+                    'graph_occurrence_id' => $meeting_id,
+                    'graph_event_id'      => $event_id,
+                ]);
+                continue;
+            }
+
             $DB->insert_record('msteamsecp_occurrences', (object) [
                 'instanceid'          => $instance->id,
                 'occurrence_index'    => $index + 1,
@@ -508,22 +578,64 @@ class meeting_creator {
                 'graph_event_id'      => $event_id,
                 'starttime'           => $starttime,
                 'endtime'             => $starttime + $duration,
-                'status'              => $starttime > time() ? 'upcoming' : 'ended',
-                'timecreated'         => time(),
+                'status'              => $starttime > $now ? 'upcoming' : 'ended',
+                'timecreated'         => $now,
             ]);
+        }
+
+        // Rows that are no longer part of the schedule.
+        $stale = [];
+        foreach ($by_start as $row) {
+            if (isset($matched[$row->id]) || $row->status === 'ended') {
+                continue;
+            }
+            $stale[] = (int) $row->id;
+        }
+
+        // Duplicates are only safe to drop when nothing references them.
+        foreach ($duplicate as $row) {
+            if (!$this->occurrence_has_data((int) $row->id)) {
+                $stale[] = (int) $row->id;
+            }
+        }
+
+        if (!empty($stale)) {
+            $this->retract_enrollee_events($stale);
+            [$in_sql, $in_params] = $DB->get_in_or_equal($stale);
+            $DB->delete_records_select('msteamsecp_occurrences', "id $in_sql", $in_params);
         }
     }
 
+    /**
+     * True when an occurrence row has learner data hanging off it, so deleting
+     * it would lose attendance, watch progress or invite tracking.
+     *
+     * @param int $occurrenceid
+     * @return bool
+     */
+    private function occurrence_has_data(int $occurrenceid): bool {
+        global $DB;
+
+        return $DB->record_exists('msteamsecp_attendance',      ['occurrenceid' => $occurrenceid])
+            || $DB->record_exists('msteamsecp_watch_progress',  ['occurrenceid' => $occurrenceid])
+            || $DB->record_exists('msteamsecp_enrollee_events', ['occurrenceid' => $occurrenceid]);
+    }
+
+    /**
+     * Expand a recurrence definition into occurrence start timestamps.
+     *
+     * Recurrence is always bounded by a number of occurrences. The "ends on
+     * date" option was removed in 1.7.2 — see msteamsecp_recurrence_count()
+     * in lib.php.
+     *
+     * @param object $instance
+     * @return int[]  Occurrence start timestamps, ascending
+     */
     private function expand_recurrence(object $instance): array {
         $starts   = [];
         $interval = max(1, (int) $instance->recurrence_interval);
         $count    = 0;
-        $max      = $instance->recurrence_count ? (int) $instance->recurrence_count : 500;
-        // Extend end_date to end of the selected day (23:59:59) so that meetings
-        // scheduled on the end date are included regardless of their time-of-day.
-        $end_date = isset($instance->recurrence_end_date)
-            ? (int) $instance->recurrence_end_date + 86399
-            : \PHP_INT_MAX;
+        $max      = self::clamp_occurrence_count($instance->recurrence_count ?? null);
 
         // Work in the site timezone so that +N days preserves wall-clock time
         // across DST transitions. Without this, adding 7*86400 seconds shifts
@@ -536,7 +648,12 @@ class meeting_creator {
             $days_of_week = json_decode($instance->recurrence_days_of_week, true) ?? [];
         }
 
-        while ($count < $max && $current->getTimestamp() <= $end_date) {
+        // Hard iteration bound. The loop is driven purely by $count now that
+        // there is no end date, so a recurrence_type that matches no branch
+        // must not be able to spin.
+        $guard = 0;
+
+        while ($count < $max && $guard++ < self::MAX_OCCURRENCES * 2) {
             if ($instance->recurrence_type === 'weekly' && !empty($days_of_week)) {
                 // Scan only the FIRST 7 days of each interval window.
                 // The window advances by (7 * interval) days each iteration,
@@ -544,7 +661,7 @@ class meeting_creator {
                 for ($d = 0; $d < 7; $d++) {
                     $candidate = $current->modify("+{$d} days");
                     $dow = (int) $candidate->format('N');
-                    if (in_array($dow, $days_of_week) && $candidate->getTimestamp() <= $end_date && $count < $max) {
+                    if (in_array($dow, $days_of_week) && $count < $max) {
                         $starts[] = $candidate->getTimestamp();
                         $count++;
                     }
@@ -690,27 +807,38 @@ class meeting_creator {
             'interval' => (int) ($instance->recurrence_interval ?? 1),
         ];
 
-        if ($instance->recurrence_type === 'weekly' && !empty($instance->recurrence_days_of_week)) {
+        $tz = new \DateTimeZone(\core_date::get_server_timezone());
+
+        if ($instance->recurrence_type === 'weekly') {
             $day_map  = [1 => 'monday', 2 => 'tuesday', 3 => 'wednesday',
                          4 => 'thursday', 5 => 'friday', 6 => 'saturday', 7 => 'sunday'];
-            $day_ints = json_decode($instance->recurrence_days_of_week, true) ?? [];
-            $pattern['daysOfWeek'] = array_values(array_filter(
+            $day_ints = !empty($instance->recurrence_days_of_week)
+                ? (json_decode($instance->recurrence_days_of_week, true) ?? [])
+                : [];
+            $days = array_values(array_filter(
                 array_map(fn($d) => $day_map[$d] ?? null, $day_ints)
             ));
+
+            // Graph requires daysOfWeek on a weekly pattern and rejects the
+            // request without it. When no day is ticked the series runs on the
+            // start date's own weekday, which is what expand_recurrence() does.
+            if (empty($days)) {
+                $startdow = (int) (new \DateTimeImmutable('@' . (int) $instance->starttime))
+                    ->setTimezone($tz)->format('N');
+                $days = [$day_map[$startdow]];
+            }
+
+            $pattern['daysOfWeek'] = $days;
         }
 
-        $tz    = new \DateTimeZone(\core_date::get_server_timezone());
-        $range = ['startDate' => (new \DateTimeImmutable('@' . (int) $instance->starttime))->setTimezone($tz)->format('Y-m-d')];
-
-        if (!empty($instance->recurrence_end_date)) {
-            $range['type']    = 'endDate';
-            // +86399 pushes into end-of-day so the correct date is selected
-            // regardless of where midnight falls in the site timezone.
-            $range['endDate'] = (new \DateTimeImmutable('@' . ((int) $instance->recurrence_end_date + 86399)))->setTimezone($tz)->format('Y-m-d');
-        } else {
-            $range['type']                = 'numbered';
-            $range['numberOfOccurrences'] = (int) ($instance->recurrence_count ?? 1);
-        }
+        // Recurrence is always bounded by a count — the "ends on date" option
+        // was removed in 1.7.2.
+        $range = [
+            'type'                => 'numbered',
+            'startDate'           => (new \DateTimeImmutable('@' . (int) $instance->starttime))
+                                        ->setTimezone($tz)->format('Y-m-d'),
+            'numberOfOccurrences' => self::clamp_occurrence_count($instance->recurrence_count ?? null),
+        ];
 
         return ['pattern' => $pattern, 'range' => $range];
     }

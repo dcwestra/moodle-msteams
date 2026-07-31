@@ -330,5 +330,77 @@ function xmldb_msteamsecp_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026073000, 'msteamsecp');
     }
 
+    if ($oldversion < 2026073100) {
+        // Recurring meetings are now bounded by an occurrence count only; the
+        // "ends on date" option is gone. Two things to repair.
+
+        // 1. De-duplicate occurrence rows. sync_occurrences() used to delete
+        //    only rows with status != 'ended' and then re-insert the entire
+        //    expansion, stamping anything already started as 'ended' — so every
+        //    re-save of a recurring activity appended another full copy of every
+        //    occurrence that had already begun. Keep the lowest id per
+        //    (instanceid, starttime) and drop the rest, but never drop a row
+        //    that carries attendance, watch progress or invite tracking.
+        $dupes = $DB->get_records_sql("
+            SELECT o.id, o.instanceid, o.starttime
+              FROM {msteamsecp_occurrences} o
+              JOIN (SELECT instanceid, starttime, MIN(id) AS keepid
+                      FROM {msteamsecp_occurrences}
+                  GROUP BY instanceid, starttime
+                    HAVING COUNT(*) > 1) d
+                ON d.instanceid = o.instanceid
+               AND d.starttime  = o.starttime
+               AND o.id <> d.keepid");
+
+        $removed = 0;
+        foreach ($dupes as $dupe) {
+            if ($DB->record_exists('msteamsecp_attendance',      ['occurrenceid' => $dupe->id])
+             || $DB->record_exists('msteamsecp_watch_progress',  ['occurrenceid' => $dupe->id])
+             || $DB->record_exists('msteamsecp_enrollee_events', ['occurrenceid' => $dupe->id])) {
+                continue;
+            }
+            $DB->delete_records('msteamsecp_occurrences', ['id' => $dupe->id]);
+            $removed++;
+        }
+        if ($removed) {
+            mtrace("  mod_msteamsecp: removed {$removed} duplicate occurrence row(s).");
+        }
+
+        // 2. Convert meetings that used an end date over to an occurrence count.
+        //    The existing occurrence rows were generated from that end date, so
+        //    the number of distinct start times is the equivalent count.
+        $bydate = $DB->get_records_select('msteamsecp',
+            'is_recurring = 1 AND recurrence_end_date IS NOT NULL AND recurrence_end_date > 0');
+
+        foreach ($bydate as $instance) {
+            $count = (int) $DB->count_records_sql(
+                "SELECT COUNT(DISTINCT starttime)
+                   FROM {msteamsecp_occurrences}
+                  WHERE instanceid = ?", [$instance->id]);
+
+            if ($count < 1) {
+                $count = (int) $instance->recurrence_count ?: 1;
+            }
+
+            $DB->update_record('msteamsecp', (object) [
+                'id'                  => $instance->id,
+                'recurrence_count'    => min($count, 200),
+                'recurrence_end_date' => null,
+            ]);
+        }
+        if ($bydate) {
+            mtrace('  mod_msteamsecp: converted ' . count($bydate)
+                . ' end-date recurring meeting(s) to an occurrence count.');
+        }
+
+        // Any remaining recurring meeting must have a usable count.
+        $DB->execute("UPDATE {msteamsecp}
+                         SET recurrence_count = 1
+                       WHERE is_recurring = 1
+                         AND (recurrence_count IS NULL OR recurrence_count < 1)");
+
+        upgrade_mod_savepoint(true, 2026073100, 'msteamsecp');
+    }
+
     return true;
 }

@@ -18,6 +18,9 @@ defined('MOODLE_INTERNAL') || die();
 
 class restore_msteamsecp_activity_structure_step extends restore_activity_structure_step {
 
+    /** @var int|null New msteamsecp instance id, set while restoring the main record. */
+    protected $restoredinstanceid = null;
+
     protected function define_structure() {
         $paths = [];
 
@@ -49,11 +52,20 @@ class restore_msteamsecp_activity_structure_step extends restore_activity_struct
         $data->join_url            = null;
         $data->recording_section_id = null; // Will be re-created on first recording.
 
+        // Recurrence is bounded by an occurrence count since 1.7.2. Backups
+        // taken before that may carry an end date and no count; the count is
+        // recovered from the restored occurrence rows in after_execute().
+        $data->recurrence_end_date = null;
+
         $data->timemodified = time();
 
         $newitemid = $DB->insert_record('msteamsecp', $data);
         $this->apply_activity_instance($newitemid);
         $this->set_mapping('msteamsecp', $oldid, $newitemid);
+
+        // Remembered for after_execute(), which repairs recurrence_count once
+        // the occurrence rows have been restored.
+        $this->restoredinstanceid = $newitemid;
     }
 
     /**
@@ -88,6 +100,37 @@ class restore_msteamsecp_activity_structure_step extends restore_activity_struct
      * Add related files after restore.
      */
     protected function after_execute() {
+        global $DB;
+
         $this->add_related_files('mod_msteamsecp', 'intro', null);
+
+        // Recover recurrence_count for instances restored from a pre-1.7.2
+        // backup, where the series was bounded by an end date and no count was
+        // stored. The restored occurrence rows were generated from that end
+        // date, so their number of distinct start times is the equivalent
+        // count. Without this the series would collapse to a single occurrence
+        // the next time the activity is saved.
+        $instanceid = $this->restoredinstanceid;
+        if (empty($instanceid)) {
+            return;
+        }
+
+        $instance = $DB->get_record('msteamsecp', ['id' => $instanceid]);
+        if (!$instance || empty($instance->is_recurring)) {
+            return;
+        }
+
+        if ((int) $instance->recurrence_count >= 1) {
+            return;
+        }
+
+        $count = (int) $DB->count_records_sql(
+            "SELECT COUNT(DISTINCT starttime)
+               FROM {msteamsecp_occurrences}
+              WHERE instanceid = ?", [$instanceid]);
+
+        $DB->set_field('msteamsecp', 'recurrence_count',
+            \mod_msteamsecp\sync\meeting_creator::clamp_occurrence_count($count),
+            ['id' => $instanceid]);
     }
 }

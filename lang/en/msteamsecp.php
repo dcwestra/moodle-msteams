@@ -46,10 +46,10 @@ $string['recurrence_weekly']    = 'Weekly';
 $string['recurrence_monthly']   = 'Monthly';
 $string['recurrence_interval']  = 'Every';
 $string['recurrence_days']      = 'On these days';
-$string['recurrence_end_type']  = 'Ends';
-$string['recurrence_end_date']  = 'On date';
-$string['recurrence_end_count'] = 'After N occurrences';
-$string['recurrence_count']     = 'Number of occurrences';
+$string['recurrence_count']      = 'Number of occurrences';
+$string['recurrence_count_help'] = 'How many sessions this meeting runs for, counting the first one. A weekly meeting starting on 31 July with 3 occurrences runs on 31 July, 7 August and 14 August.
+
+Maximum 200. Each occurrence creates its own calendar invite and its own recording, so keep this to the number of sessions actually needed.';
 $string['recording_behavior']   = 'Recording behavior (recurring)';
 $string['recording_behavior_append']  = 'Keep all recordings (one per occurrence)';
 $string['recording_behavior_replace'] = 'Replace with latest recording';
@@ -129,6 +129,7 @@ $string['error_graph_method']         = 'Unsupported HTTP method: {$a}';
 $string['error_recording_download']   = 'Recording download failed (HTTP {$a}).';
 $string['error_endtime_before_start'] = 'End time must be after start time.';
 $string['error_recurrence_count']     = 'Please enter a valid number of occurrences (minimum 1).';
+$string['error_recurrence_count_max'] = 'A recurring meeting can have at most {$a} occurrences.';
 $string['error_coorganiser_required']      = 'At least one co-organiser email is required. Without a co-organiser, learners will be held in the lobby with no one to admit them.';
 $string['error_coorganiser_email_invalid'] = 'One or more email addresses are not valid. Enter one email per line (or comma-separated).';
 
