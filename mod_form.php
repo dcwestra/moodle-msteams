@@ -105,9 +105,8 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
         }
 
         // End condition — always a number of occurrences. The "ends on date"
-        // option was removed in 1.7.2: it made the resulting number of sessions
-        // non-obvious, so it invited repeated re-saving to get the count right,
-        // and every re-save used to duplicate occurrence rows.
+        // option was removed in 1.7.2 because the resulting number of sessions
+        // wasn't visible from the form.
         $mform->addElement('text', 'recurrence_count', get_string('recurrence_count', 'mod_msteamsecp'), ['size' => 5]);
         $mform->setType('recurrence_count', PARAM_INT);
         $mform->setDefault('recurrence_count', 4);
@@ -148,6 +147,66 @@ class mod_msteamsecp_mod_form extends moodleform_mod {
         // add_completion_rules() below, which Moodle calls from within this.
         $this->standard_coursemodule_elements();
         $this->add_action_buttons();
+
+        $this->prevent_double_submit();
+    }
+
+    /**
+     * Stop a second submission of this form reaching the server.
+     *
+     * Saving this activity creates a real Teams meeting and sends real calendar
+     * invites, and does so through roughly ten sequential Graph calls inside the
+     * request — so Save can sit there for several seconds looking like it did
+     * nothing. A stray double-click (or a twitchy trackpad) during that window
+     * submits the form twice and produces two complete, separately-linked Teams
+     * meetings. There is no way to undo that server-side once both requests are
+     * in flight, so the click has to be stopped in the browser.
+     *
+     * Two details matter:
+     *
+     *  - The latch is set from a zero-delay timer, not synchronously. That
+     *    defers it until every other submit handler has run, so if Moodle's
+     *    client-side validation blocked the submission the form is left usable
+     *    rather than permanently disabled.
+     *  - Buttons are disabled on the same timer. A disabled control is not
+     *    serialised, and Moodle reads the button's own name to tell "save and
+     *    display" from "save and return" from "cancel", so disabling it before
+     *    the submission is serialised would lose that.
+     */
+    private function prevent_double_submit(): void {
+        global $PAGE;
+
+        $formid = $this->_form->getAttribute('id');
+        if (empty($formid)) {
+            return;
+        }
+
+        // Nowdoc: the JS is full of $ and must not be interpolated by PHP.
+        $js = <<<'JS'
+require(['jquery'], function($) {
+    var form = document.getElementById(FORMID);
+    if (!form) {
+        return;
+    }
+    $(form).on('submit', function(e) {
+        if (form.dataset.msteamsecpSubmitted === '1') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return false;
+        }
+        window.setTimeout(function() {
+            if (e.isDefaultPrevented()) {
+                return;
+            }
+            form.dataset.msteamsecpSubmitted = '1';
+            $(form).find('input[type="submit"], button[type="submit"]').prop('disabled', true);
+        }, 0);
+        return true;
+    });
+});
+JS;
+
+        $PAGE->requires->js_amd_inline(str_replace('FORMID', json_encode($formid), $js));
     }
 
     /**

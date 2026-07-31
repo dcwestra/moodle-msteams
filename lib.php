@@ -87,6 +87,12 @@ function msteamsecp_update_instance(stdClass $data, mod_msteamsecp_mod_form $mfo
     $data->recurrence_days_of_week = msteamsecp_extract_days_of_week($data);
     $data->id                      = $data->instance;
 
+    // Snapshot what is stored before anything is written, so we can tell
+    // whether this edit actually changes the meeting itself.
+    $before        = $DB->get_record('msteamsecp', ['id' => $data->id], '*', MUST_EXIST);
+    $before_emails = $DB->get_fieldset_select('msteamsecp_coorganisers', 'email',
+        'instanceid = ?', [$data->id]);
+
     // Ensure lobby_bypass has a valid value in case form cleaning dropped it.
     if (empty($data->lobby_bypass)) {
         $data->lobby_bypass = get_config('mod_msteamsecp', 'default_lobby_bypass') ?: 'organizer';
@@ -111,16 +117,29 @@ function msteamsecp_update_instance(stdClass $data, mod_msteamsecp_mod_form $mfo
 
     msteamsecp_notify_token_status();
 
-    try {
-        $instance = $DB->get_record('msteamsecp', ['id' => $data->id], '*', MUST_EXIST);
-        $creator->update($instance);
-    } catch (\Throwable $e) {
-        $msg = $e->getMessage();
-        if (strpos($msg, 'MSTEAMSECP_AUTH_') !== false) {
-            msteamsecp_notify_auth_failure($msg);
-        } else {
-            debugging('msteamsecp: Graph meeting update failed: ' . $msg, DEBUG_DEVELOPER);
+    $after        = $DB->get_record('msteamsecp', ['id' => $data->id], '*', MUST_EXIST);
+    $after_emails = $DB->get_fieldset_select('msteamsecp_coorganisers', 'email',
+        'instanceid = ?', [$data->id]);
+
+    // Only talk to Graph when something the meeting actually depends on has
+    // changed. Syncing deletes and recreates the service account's calendar
+    // event, which mails a cancellation and a fresh invite to every
+    // co-organiser — alarming, and pointless when the edit only touched
+    // LMS-side settings such as a completion threshold.
+    if (msteamsecp_meeting_sync_required($before, $after, $before_emails, $after_emails)) {
+        try {
+            $creator->update($after);
+        } catch (\Throwable $e) {
+            $msg = $e->getMessage();
+            if (strpos($msg, 'MSTEAMSECP_AUTH_') !== false) {
+                msteamsecp_notify_auth_failure($msg);
+            } else {
+                debugging('msteamsecp: Graph meeting update failed: ' . $msg, DEBUG_DEVELOPER);
+            }
         }
+    } else {
+        debugging('msteamsecp: instance ' . $data->id . ' saved with no meeting-affecting change — '
+            . 'skipped Graph sync and left co-organiser invites alone.', DEBUG_DEVELOPER);
     }
 
     // Re-sync Moodle internal calendar events.
@@ -440,6 +459,78 @@ function msteamsecp_sync_calendar_events(stdClass $instance, int $cmid): void {
 /**
  * Extract individual day checkboxes from form data into a JSON string.
  */
+/**
+ * Instance fields whose values are pushed to Microsoft Graph.
+ *
+ * A change to any of these has to reach Teams or Outlook. A change to anything
+ * else is LMS-side only and must NOT trigger a sync, because syncing deletes
+ * and recreates the service account's calendar event — which sends every
+ * co-organiser a cancellation followed by a new invite.
+ *
+ * Deliberately excluded:
+ *  - completion_attendance, completion_attendance_pct, completion_recording,
+ *    completion_recording_pct — reporting thresholds, nothing to do with the
+ *    meeting.
+ *  - recording_mode, recording_behavior, recording_section_id — govern what
+ *    cron does with the recording afterwards. Note auto_record IS included:
+ *    that one maps to the meeting's recordAutomatically setting.
+ *  - intro — the service account's calendar event body is built from the
+ *    course fullname and join URL, not the intro, and learner invites that
+ *    have already been pushed are never rewritten. So an intro edit changes
+ *    nothing anyone would receive.
+ *
+ * @return string[]
+ */
+function msteamsecp_meeting_sync_fields(): array {
+    return [
+        'name',                     // onlineMeeting + calendar event subject
+        'starttime',
+        'endtime',
+        'lobby_bypass',             // lobbyBypassSettings
+        'auto_record',              // recordAutomatically
+        'is_recurring',
+        'recurrence_type',
+        'recurrence_interval',
+        'recurrence_count',
+        'recurrence_days_of_week',
+        'attendance_requirement',   // decides whether learners are invited to one occurrence or all
+    ];
+}
+
+/**
+ * Decide whether an edit needs to be pushed to Graph.
+ *
+ * Both records must be read from the database (not form data) so the values
+ * being compared have consistent types.
+ *
+ * @param stdClass $before        Stored record before the edit
+ * @param stdClass $after         Stored record after the edit
+ * @param string[] $beforeemails  Co-organiser addresses before the edit
+ * @param string[] $afteremails   Co-organiser addresses after the edit
+ * @return bool
+ */
+function msteamsecp_meeting_sync_required(stdClass $before, stdClass $after,
+                                          array $beforeemails, array $afteremails): bool {
+    // No Graph meeting yet — creation failed earlier, or this was restored
+    // from a backup. The sync is what creates it, so it must run.
+    if (empty($after->graph_meeting_id)) {
+        return true;
+    }
+
+    foreach (msteamsecp_meeting_sync_fields() as $field) {
+        if ((string) ($before->$field ?? '') !== (string) ($after->$field ?? '')) {
+            return true;
+        }
+    }
+
+    $beforeemails = array_map('core_text::strtolower', $beforeemails);
+    $afteremails  = array_map('core_text::strtolower', $afteremails);
+    sort($beforeemails);
+    sort($afteremails);
+
+    return $beforeemails !== $afteremails;
+}
+
 /**
  * Resolve the number of occurrences for a recurring meeting.
  *
